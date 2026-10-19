@@ -1,0 +1,31 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function activeStaff() {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/staff/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/staff/$(request.auth.uid)).data.active == true;
+    }
+
+    // Bukti pembayaran QRIS dari pelanggan: hanya pemilik yang boleh mengunggah, staf yang boleh melihat.
+    match /proofs/{uid}/{fileName} {
+      allow create: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow read: if activeStaff() || (request.auth != null && request.auth.uid == uid);
+      allow update, delete: if false;
+    }
+
+    // Foto produk di root bucket dibaca publik oleh website; tulis hanya lewat Firebase Console.
+    match /{fileName} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

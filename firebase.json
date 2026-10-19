@@ -1,0 +1,36 @@
+{
+  "functions": {
+    "source": "functions",
+    "predeploy": [
+      "npm --prefix functions run build"
+    ]
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "hosting": {
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/shopee/callback",
+        "function": {
+          "functionId": "shopeeCallback",
+          "region": "asia-southeast2"
+        }
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}

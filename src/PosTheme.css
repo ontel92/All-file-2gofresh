@@ -1,0 +1,335 @@
+/* POS theme layer: loaded last so it refines the shell without touching any panel logic. */
+.pos-shell {
+  --pt-matcha: #2f5d46;
+  --pt-matcha-d: #1f4232;
+  --pt-paper: #f6f3ea;
+  --pt-torii: #c4452d;
+  --pt-action: #07775a;
+  background: var(--pt-paper);
+  color: #1f2d27;
+}
+
+/* ---------- Header ---------- */
+.pos-shell .pos-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 64px;
+  padding: 0 20px;
+  border-bottom: 3px solid var(--pt-torii);
+  background: linear-gradient(135deg, var(--pt-matcha-d), var(--pt-matcha));
+  box-shadow: 0 2px 10px rgba(20, 40, 30, 0.18);
+}
+
+.pos-shell .pos-sidebar-toggle {
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 20px;
+}
+
+.pos-shell .pos-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  color: #fff;
+  text-decoration: none;
+}
+
+.pos-shell .pos-brand .pos-logo-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  color: #fff;
+  background: transparent;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.pos-shell .pos-brand-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pos-shell .pos-brand-copy strong {
+  color: #fff;
+  font-size: 16px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.pos-shell .pos-brand-copy small {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.pos-shell .pos-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.pos-shell .pos-user {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0;
+  border: 0;
+  text-align: left;
+}
+
+.pos-shell .pos-avatar {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--pt-matcha-d);
+  font-weight: 800;
+  font-size: 15px;
+}
+
+.pos-shell .pos-user-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.pos-shell .pos-user-text strong {
+  color: #fff;
+  font-size: 14px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pos-shell .pos-user-text span {
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.pos-shell .pos-chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pos-shell .pos-chip.on {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.pos-shell .pos-chip.off {
+  background: rgba(0, 0, 0, 0.2);
+  color: rgba(255, 255, 255, 0.8);
+  border: 1px solid transparent;
+}
+
+.pos-shell .pos-header-actions button {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pos-shell .pos-header-utility {
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.pos-shell .pos-header-utility.printer-on {
+  border-color: #8be0b4;
+  background: rgba(139, 224, 180, 0.22);
+  color: #e9fff3;
+}
+
+.pos-shell .pos-header-utility.printer-off {
+  border-color: #ffb4a6;
+  background: rgba(196, 69, 45, 0.35);
+  color: #fff;
+}
+
+.pos-shell .pos-logout {
+  border: 0;
+  background: #fff;
+  color: var(--pt-torii);
+}
+
+/* ---------- Sidebar ---------- */
+.pos-shell .pos-sidebar {
+  background: #fffdf8;
+  border-right: 1px solid #e4dccb;
+}
+
+.pos-shell .pos-nav-group {
+  margin: 14px 10px 4px;
+  color: #8a8372;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.pos-shell .pos-nav-item {
+  min-height: 44px;
+  border-radius: 10px;
+  color: #34443b;
+  font-size: 14px;
+}
+
+.pos-shell .pos-nav-item:hover {
+  background: #f1ede1;
+}
+
+.pos-shell .pos-nav-item.active {
+  border-color: transparent;
+  background: var(--pt-matcha);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: inset 4px 0 0 var(--pt-torii);
+}
+
+.pos-shell .pos-nav-item.active .pos-nav-icon {
+  color: #fff;
+}
+
+.pos-shell .pos-nav-icon {
+  color: #5d6f64;
+  font-size: 15px;
+}
+
+.pos-shell .pos-nav-item small {
+  font-size: 10px;
+}
+
+.pos-shell .pos-content {
+  padding-top: 22px;
+}
+
+.pos-shell .pos-page-heading h1 {
+  color: var(--pt-matcha-d);
+}
+
+/* ---------- Buttons: same look as the retail cashier action buttons ---------- */
+.pos-shell .sf-primary,
+.pos-shell .ct-card button.sf-primary,
+.pos-shell .ct-card .sf-primary {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--pt-action);
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.pos-shell .sf-primary:disabled,
+.pos-shell .ct-card button.sf-primary:disabled {
+  background: var(--pt-action);
+  color: #fff;
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pos-shell .sf-primary.sf-wa,
+.sf-gate .sf-primary.sf-wa {
+  background: #25a244;
+  padding: 0.8rem 1rem;
+  box-sizing: border-box;
+}
+
+.sf-gate .sf-primary {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  border-radius: 8px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.sf-gate .sf-primary:disabled {
+  background: #07775a;
+  color: #fff;
+  opacity: 0.45;
+}
+
+.pos-shell .ct-card button.sh-void {
+  border-color: #e6b8b0;
+  background: #fff4f2;
+  color: #b3261e;
+  font-weight: 600;
+}
+
+.yubi-send button:disabled,
+.chat-form button:disabled {
+  opacity: 0.5;
+}
+
+/* ---------- Responsive header ---------- */
+@media (max-width: 900px) {
+  .pos-shell .pos-chip {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .pos-shell .pos-header {
+    gap: 8px;
+    min-height: 58px;
+    padding: 0 10px;
+  }
+
+  .pos-shell .pos-brand-copy small,
+  .pos-shell .pos-user-text span,
+  .pos-shell .pos-header-utility {
+    display: none;
+  }
+
+  .pos-shell .pos-brand-copy strong {
+    font-size: 14px;
+  }
+
+  .pos-shell .pos-user-text strong {
+    max-width: 70px;
+    font-size: 12px;
+  }
+
+  .pos-shell .pos-avatar {
+    width: 30px;
+    height: 30px;
+    font-size: 13px;
+  }
+
+  .pos-shell .pos-header-actions button {
+    min-height: 34px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+}

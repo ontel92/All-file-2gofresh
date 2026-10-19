@@ -1,0 +1,171 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function staffPath(uid) {
+      return /databases/$(database)/documents/staff/$(uid);
+    }
+
+    function activeStaff() {
+      return signedIn()
+        && !(
+          request.auth.token.keys().hasAny(['forcePasswordChange'])
+          && request.auth.token.forcePasswordChange == true
+        )
+        && exists(staffPath(request.auth.uid))
+        && get(staffPath(request.auth.uid)).data.active == true
+        && get(staffPath(request.auth.uid)).data.role in ['owner', 'supervisor', 'cashier'];
+    }
+
+    function ownerOrSupervisor() {
+      return activeStaff()
+        && get(staffPath(request.auth.uid)).data.role in ['owner', 'supervisor'];
+    }
+
+    match /catalogProducts/{productId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /staff/{staffId} {
+      allow get: if activeStaff() && (request.auth.uid == staffId || ownerOrSupervisor());
+      allow list: if ownerOrSupervisor();
+      allow write: if false;
+    }
+
+    match /inventory/{sku} {
+      allow read: if activeStaff();
+      allow write: if false;
+    }
+
+    match /stockMovements/{movementId} {
+      allow read: if activeStaff();
+      allow write: if false;
+    }
+
+    match /pendingOrders/{orderId} {
+      allow read: if activeStaff();
+      allow create: if activeStaff()
+        && request.resource.data.keys().hasOnly(['label', 'items', 'createdBy', 'createdByName', 'createdAt', 'updatedAt', 'channel', 'memberPhone', 'memberName'])
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.label is string
+        && request.resource.data.label.size() <= 60
+        && request.resource.data.items is list
+        && request.resource.data.items.size() > 0
+        && request.resource.data.items.size() <= 100
+        && request.resource.data.createdByName is string
+        && (!('channel' in request.resource.data) || request.resource.data.channel in ['retail', 'b2b'])
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if activeStaff()
+        && request.resource.data.keys().hasOnly(['label', 'items', 'createdBy', 'createdByName', 'createdAt', 'updatedAt', 'channel', 'memberPhone', 'memberName'])
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.label is string
+        && request.resource.data.label.size() <= 60
+        && request.resource.data.items is list
+        && request.resource.data.items.size() > 0
+        && request.resource.data.items.size() <= 100
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if activeStaff();
+    }
+
+    match /b2bPrices/{sku} {
+      allow read: if activeStaff();
+      allow write: if false;
+    }
+
+    match /b2bMembers/{phone} {
+      allow read: if activeStaff();
+      allow create, update: if ownerOrSupervisor()
+        && phone.matches('^628[0-9]{7,12}$')
+        && request.resource.data.keys().hasOnly(['name', 'phone', 'active', 'updatedAt'])
+        && request.resource.data.phone == phone
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.active is bool
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /sales/{saleId} {
+      allow read: if activeStaff()
+        && (ownerOrSupervisor() || resource.data.cashierUid == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /shiftState/{docId} {
+      allow read: if activeStaff();
+      allow write: if false;
+    }
+
+    match /shifts/{shiftId} {
+      allow read: if activeStaff()
+        && (ownerOrSupervisor() || resource.data.cashierUid == request.auth.uid);
+      allow write: if false;
+
+      match /topups/{topupId} {
+        allow read: if activeStaff()
+          && (ownerOrSupervisor()
+            || get(/databases/$(database)/documents/shifts/$(shiftId)).data.cashierUid == request.auth.uid);
+        allow write: if false;
+      }
+
+      match /expenses/{expenseId} {
+        allow read: if activeStaff()
+          && (ownerOrSupervisor()
+            || get(/databases/$(database)/documents/shifts/$(shiftId)).data.cashierUid == request.auth.uid);
+        allow write: if false;
+      }
+    }
+
+    match /memberRegistrations/{registrationId} {
+      allow read: if activeStaff();
+      allow write: if false;
+    }
+
+    match /retailMembers/{phone} {
+      allow read: if activeStaff();
+      allow write: if false;
+    }
+
+    match /webOrders/{orderId} {
+      allow read: if activeStaff() || (signedIn() && resource.data.customerUid == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /customers/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+
+      match /pointLedger/{entryId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if false;
+      }
+    }
+
+    match /storeStatus/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /chats/{chatId} {
+      allow read: if activeStaff() || (signedIn() && resource.data.customerUid == request.auth.uid);
+      allow write: if false;
+
+      match /messages/{messageId} {
+        allow read: if activeStaff() || (signedIn() && request.auth.uid == chatId);
+        allow write: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,29 @@
+.sf-page { display: grid; gap: 0.9rem; }
+.sf-gate { display: grid; gap: 0.7rem; max-width: 440px; }
+.sf-field { display: grid; gap: 0.25rem; font-size: 0.85rem; }
+.sf-field input { font: inherit; padding: 0.55rem 0.7rem; border: 1px solid #cfd8e3; border-radius: 8px; }
+.sf-field small, .sf-note { color: #6b7480; font-size: 0.8rem; margin: 0; }
+.sf-total { margin: 0; }
+.sf-primary { font: inherit; font-weight: 700; padding: 0.7rem 1rem; border: 0; border-radius: 10px; background: #2f8f5b; color: #fff; cursor: pointer; }
+.sf-primary:disabled { background: #c5ced9; cursor: not-allowed; }
+.sf-link { font: inherit; background: none; border: 0; color: #5b6472; cursor: pointer; text-decoration: underline; }
+.sf-funds { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.6rem; }
+.sf-fund { display: grid; gap: 0.15rem; padding: 0.7rem 0.9rem; border: 1px solid #e3e9f1; border-radius: 10px; background: #fff; }
+.sf-fund h3 { margin: 0; font-size: 0.8rem; color: #5b6472; font-weight: 600; }
+.sf-fund strong { font-size: 1.15rem; }
+.sf-fund small { color: #6b7480; font-size: 0.72rem; }
+.sf-fund .bad, .sf-bad, .sf-diff.bad, .sf-rows .bad dd { color: #b3261e; }
+.sf-form { display: grid; gap: 0.7rem; }
+.sf-cats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.5rem; }
+.sf-cats button { font: inherit; display: grid; gap: 0.1rem; text-align: left; padding: 0.55rem 0.7rem; border: 1px solid #cfd8e3; border-radius: 10px; background: #fff; cursor: pointer; }
+.sf-cats button small { color: #6b7480; font-size: 0.72rem; }
+.sf-cats button.active { background: #e6f4ec; border-color: #2f8f5b; }
+.sf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0.9rem; }
+.sf-rows { margin: 0; display: grid; gap: 0.3rem; }
+.sf-rows > div { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.9rem; }
+.sf-rows dt { color: #4b5563; }
+.sf-rows dd { margin: 0; font-weight: 600; }
+.sf-rows .total { border-top: 1px solid #e3e9f1; padding-top: 0.35rem; font-weight: 700; }
+.sf-diff { margin: 0; font-weight: 700; }
+.sf-diff.ok, .sf-rows .ok dd { color: #1d7a46; }
+.sf-sub { margin: 1rem 0 0.4rem; font-size: 0.9rem; }
