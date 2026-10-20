@@ -55,24 +55,7 @@ function soundFor(src: string) {
 
 export function playSound(src: string) {
   const audio = soundFor(src)
+  audio.pause()
   audio.currentTime = 0
   void audio.play().catch(() => undefined)
-}
-
-if (typeof window !== 'undefined') {
-  const unlock = () => {
-    for (const src of ['/order_masuk.mp3', '/chatmasuk.mp3', '/loud_alarm.mp3']) {
-      const audio = soundFor(src)
-      audio.muted = true
-      void audio.play().then(() => {
-        audio.pause()
-        audio.currentTime = 0
-        audio.muted = false
-      }).catch(() => {
-        audio.muted = false
-      })
-    }
-    window.removeEventListener('pointerdown', unlock)
-  }
-  window.addEventListener('pointerdown', unlock)
 }

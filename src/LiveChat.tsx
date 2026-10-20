@@ -61,7 +61,6 @@ export function useStoreChats(enabled: boolean) {
   }, [enabled])
 
   function enableSound() {
-    playSound('/chatmasuk.mp3')
     setSoundOn(true)
   }
 

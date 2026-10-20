@@ -5,7 +5,7 @@ import { playSound, pushToast, setOps } from './opsStore'
 
 type WatchOrder = { orderSn: string; buyer: string; shipBy: number }
 type WatchChat = { id: string; buyer: string; last: string; unread: number; fromBuyer: boolean; latestId: string; lastAt: number }
-const CHAT_SEEN_KEY = 'shopeeSeenChatMsgs'
+const CHAT_CURSOR_KEY = 'shopeeChatCursorV2'
 const UNANSWERED_DAYS = 7
 
 const POLL_MS = 30000
@@ -17,6 +17,15 @@ function loadSeen() {
   try {
     const raw = localStorage.getItem(SEEN_KEY)
     return raw === null ? null : new Set<string>(JSON.parse(raw) as string[])
+  } catch {
+    return null
+  }
+}
+
+function loadChatCursor(): Record<string, string> | null {
+  try {
+    const raw = localStorage.getItem(CHAT_CURSOR_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, string>) : null
   } catch {
     return null
   }
@@ -75,24 +84,39 @@ export default function ShopeeWatcher() {
 
   useEffect(() => {
     let stopped = false
-    let seenMsgs: Set<string>
-    try {
-      seenMsgs = new Set<string>(JSON.parse(localStorage.getItem(CHAT_SEEN_KEY) ?? '[]') as string[])
-    } catch {
-      seenMsgs = new Set<string>()
-    }
+    let cursor = loadChatCursor()
 
     async function pollChats() {
       try {
         const result = await httpsCallable<unknown, { conversations: WatchChat[] }>(functions, 'shopeeChats')()
         if (stopped) return
+        const chats = result.data.conversations
         const since = Date.now() - UNANSWERED_DAYS * 86400000
-        const waiting = result.data.conversations.filter((chat) => (chat.fromBuyer || chat.unread > 0) && chat.lastAt >= since)
+        const waiting = chats.filter((chat) => (chat.fromBuyer || chat.unread > 0) && chat.lastAt >= since)
         setOps({ shopeeUnreadChats: waiting.length })
-        const incoming = waiting.filter((chat) => !seenMsgs.has(`${chat.id}:${chat.latestId}`))
+
+        const isFirstSnapshot = cursor === null
+        const incoming = isFirstSnapshot
+          ? []
+          : chats.filter(
+              (chat) =>
+                chat.fromBuyer &&
+                chat.latestId &&
+                chat.lastAt >= since &&
+                cursor?.[chat.id] !== chat.latestId,
+            )
+        const nextCursor = { ...(cursor ?? {}) }
+        for (const chat of chats) {
+          if (chat.id && chat.latestId) nextCursor[chat.id] = chat.latestId
+        }
+        cursor = Object.fromEntries(Object.entries(nextCursor).slice(-500))
+        try {
+          localStorage.setItem(CHAT_CURSOR_KEY, JSON.stringify(cursor))
+        } catch {
+          // Notifications still work for this tab if browser storage is unavailable.
+        }
+
         if (incoming.length > 0) {
-          incoming.forEach((chat) => seenMsgs.add(`${chat.id}:${chat.latestId}`))
-          localStorage.setItem(CHAT_SEEN_KEY, JSON.stringify([...seenMsgs].slice(-300)))
           playSound('/chatmasuk.mp3')
           for (const chat of incoming.slice(0, 4)) {
             pushToast({ icon: '💬', title: `Chat Shopee: ${chat.buyer || 'Pembeli'}`, body: chat.last, sticky: false, actions: [{ label: 'Buka chat', panel: 'chat' }] })

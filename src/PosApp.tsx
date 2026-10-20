@@ -959,7 +959,6 @@ function PosApp() {
   const memberData = useMemberData(dataReady)
   const webOrderData = useWebOrders(dataReady)
   const chatData = useStoreChats(dataReady)
-  const enableChatSound = chatData.enableSound
   const ops = useOps()
   const isManager = profile?.role === 'owner' || profile?.role === 'supervisor'
   usePresence(dataReady, user?.uid, profile?.displayName ?? '', profile?.role ?? '', activePanel)
@@ -1020,10 +1019,6 @@ function PosApp() {
       return () => window.clearTimeout(timer)
     }
   }, [shiftData.state, user])
-  useEffect(() => {
-    window.addEventListener('pointerdown', enableChatSound, { once: true })
-    return () => window.removeEventListener('pointerdown', enableChatSound)
-  }, [enableChatSound])
   const printer = usePrinter()
   const [printerPanelOpen, setPrinterPanelOpen] = useState(false)
 

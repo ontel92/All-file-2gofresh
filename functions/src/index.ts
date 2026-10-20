@@ -25,6 +25,8 @@ const shiftCallableOptions = {
   timeoutSeconds: 60,
 } as const
 
+const chatCallableOptions = { ...shiftCallableOptions, memory: '512MiB' } as const
+
 const spreadsheetId = '1Z3GxcqyB2DxGmfJcMuWvjDFKRRv7jceAlHPvfQ_zHR8'
 const collectionName = 'catalogProducts'
 const sheetRange = 'A:W'
@@ -1694,7 +1696,7 @@ export const voidSale = onCall(
 )
 
 export const sendChatMessage = onCall(
-  { ...shiftCallableOptions, maxInstances: 5 },
+  { ...chatCallableOptions, maxInstances: 5 },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Sesi chat belum siap. Muat ulang halaman.')
@@ -1753,7 +1755,7 @@ export const sendChatMessage = onCall(
   },
 )
 
-export const replyChat = onCall(shiftCallableOptions, async (request) => {
+export const replyChat = onCall(chatCallableOptions, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Silakan login ke POS terlebih dahulu.')
   }
@@ -1793,7 +1795,7 @@ export const replyChat = onCall(shiftCallableOptions, async (request) => {
   return { ok: true }
 })
 
-export const markChatRead = onCall(shiftCallableOptions, async (request) => {
+export const markChatRead = onCall(chatCallableOptions, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Silakan login ke POS terlebih dahulu.')
   }
@@ -1811,7 +1813,7 @@ export const markChatRead = onCall(shiftCallableOptions, async (request) => {
   return { ok: true }
 })
 
-export const markChatSeenByCustomer = onCall(shiftCallableOptions, async (request) => {
+export const markChatSeenByCustomer = onCall(chatCallableOptions, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Sesi chat belum siap.')
   }
@@ -2207,4 +2209,3 @@ export const closeShift = onCall({ ...shiftCallableOptions, secrets: [reportSmtp
   const emailSent = await sendShiftReportEmail(summary.shiftId, report.text, report.cashierName)
   return { ...summary, reportText: report.text, emailSent }
 })
-
