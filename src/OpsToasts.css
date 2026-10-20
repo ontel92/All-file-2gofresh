@@ -1,0 +1,9 @@
+.ops-toasts { position: fixed; right: 0.8rem; bottom: 0.8rem; z-index: 9998; display: grid; gap: 0.5rem; width: min(360px, calc(100vw - 1.6rem)); }
+.ops-toast { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.75rem 0.8rem; background: #fff; border-left: 5px solid #07775a; border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22); animation: ops-in 0.25s ease-out; }
+.ops-toast-icon { font-size: 1.5rem; line-height: 1; }
+.ops-toast-body { display: grid; gap: 0.15rem; min-width: 0; flex: 1; font-size: 0.88rem; color: #333; }
+.ops-toast-body span { overflow-wrap: anywhere; color: #666; }
+.ops-toast-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.3rem; }
+.ops-toast-actions button { border: 1px solid #07775a; background: #07775a; color: #fff; border-radius: 6px; padding: 0.25rem 0.6rem; cursor: pointer; font-size: 0.8rem; }
+.ops-toast-close { border: 0; background: transparent; font-size: 1.3rem; line-height: 1; cursor: pointer; color: #888; }
+@keyframes ops-in { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }

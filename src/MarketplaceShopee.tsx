@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from './posFirebase'
 import { printShippingLabel, usePrinter } from './printer'
+import { getOps, setOps, useOps } from './opsStore'
 import './ShopeePanel.css'
 
 type Item = { itemId: number; modelId: number; name: string; variant: string; sku: string; quantity: number; price: number; image: string }
@@ -73,6 +74,15 @@ function countdown(ms: number) {
   const minutes = Math.floor(ms / 60000)
   const hours = Math.floor(minutes / 60)
   return `Atur pickup dalam ${hours > 0 ? `${hours} jam ` : ''}${minutes % 60} menit`
+}
+
+function chatTime(ms: number) {
+  if (!ms) return ''
+  const date = new Date(ms)
+  const today = new Date().setHours(0, 0, 0, 0)
+  if (ms >= today) return date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+  if (ms >= today - 86400000) return 'Kemarin'
+  return date.toLocaleDateString('id-ID', { dateStyle: 'short' })
 }
 
 function message(failure: unknown) {
@@ -186,6 +196,22 @@ function OrdersTab() {
   const [now, setNow] = useState(() => Date.now())
   const [counts, setCounts] = useState<Record<string, number>>({})
   const printer = usePrinter()
+  const { openOrderSn } = useOps()
+
+  useEffect(() => {
+    if (!openOrderSn) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setTab('READY_TO_SHIP')
+    setSearch('')
+    setOpenSn(openOrderSn)
+  }, [openOrderSn])
+
+  useEffect(() => {
+    const target = getOps().openOrderSn
+    if (!target || !orders.some((order) => order.orderSn === target)) return
+    document.getElementById(`sp-order-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setOps({ openOrderSn: '' })
+  }, [orders, openOrderSn])
 
   const load = useCallback(async (status: string, next = '') => {
     setLoading(true)
@@ -313,7 +339,7 @@ function OrdersTab() {
       {loading && orders.length === 0 && <p className="sp-muted">Memuat pesanan...</p>}
       {!loading && shown.length === 0 && !error && <div className="sp-empty">Belum ada pesanan</div>}
       {shown.map((order) => (
-        <article key={order.orderSn} className="sp-order">
+        <article key={order.orderSn} id={`sp-order-${order.orderSn}`} className={`sp-order${openSn === order.orderSn ? ' sp-focus' : ''}`}>
           <header>
             <span><b>{order.buyer || 'Pembeli'}</b> · {order.orderSn}</span>
             <span className={`sp-badge s-${order.status}`}>{statusText[order.status] ?? order.status}</span>
@@ -490,10 +516,12 @@ function ProductsTab() {
   )
 }
 
-type Conversation = { id: string; buyerId: number; buyer: string; last: string; unread: number }
+type Conversation = { id: string; buyerId: number; buyer: string; last: string; unread: number; fromBuyer: boolean; lastAt: number; latestId: string }
 type Msg = { id: string; mine: boolean; text: string; at: number; type: string }
 
-function ChatTab() {
+export function ShopeeChat() {
+  const [chatTab, setChatTab] = useState<'today' | 'all'>('today')
+  const [openGroups, setOpenGroups] = useState({ unanswered: true, answered: false })
   const [chats, setChats] = useState<Conversation[]>([])
   const [active, setActive] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<Msg[]>([])
@@ -548,19 +576,43 @@ function ChatTab() {
     }
   }
 
+  const dayStart = new Date().setHours(0, 0, 0, 0)
+  const visibleChats = chatTab === 'today' ? chats.filter((chat) => chat.lastAt >= dayStart || ((chat.fromBuyer || chat.unread > 0) && chat.lastAt >= dayStart - 6 * 86400000)) : chats
+  const unanswered = visibleChats.filter((chat) => chat.fromBuyer || chat.unread > 0)
+  const answered = visibleChats.filter((chat) => !chat.fromBuyer && chat.unread === 0)
+  const totalUnread = chats.filter((chat) => (chat.fromBuyer || chat.unread > 0) && chat.lastAt >= dayStart - 6 * 86400000).length
+
   return (
     <div className={`sp-chat${active ? ' open' : ''}`}>
       <div className="sp-chat-list">
         {error && <p className="sp-error" role="alert">{error}</p>}
-        {chats.length === 0 && !error && <div className="sp-empty">Belum ada percakapan</div>}
-        {chats.map((chat) => (
-          <button key={chat.id} type="button" className={active?.id === chat.id ? 'on' : ''} onClick={() => setActive(chat)}>
-            <b>{chat.buyer || `Pembeli ${chat.buyerId}`}</b>
-            <span>{chat.last}</span>
-            {chat.unread > 0 && <i>{chat.unread}</i>}
+        <div className="sp-chat-tabs">
+          <button type="button" className={chatTab === 'today' ? 'on' : ''} onClick={() => setChatTab('today')}>Chat Hari Ini</button>
+          <button type="button" className={chatTab === 'all' ? 'on' : ''} onClick={() => setChatTab('all')}>
+            Semua Chat{totalUnread > 0 && <i className="sp-dot" />}
           </button>
-        ))}
-      </div>
+        </div>
+        {chats.length === 0 && !error && <div className="sp-empty">Belum ada percakapan</div>}
+        {([['unanswered', 'Belum Dibalas', unanswered], ['answered', 'Sudah Dibalas', answered]] as const).map(([key, label, rows]) => (
+          <div key={key} className="sp-chat-group">
+            <button type="button" className="sp-chat-group-head" onClick={() => setOpenGroups((current) => ({ ...current, [key]: !current[key] }))}>
+              <span>{openGroups[key] ? '▾' : '▸'} {label} ({rows.length})</span>
+            </button>
+            {openGroups[key] && rows.map((chat) => (
+              <button key={chat.id} type="button" className={`sp-chat-row${active?.id === chat.id ? ' on' : ''}`} onClick={() => setActive(chat)}>
+                <span className="sp-avatar">{(chat.buyer || '?').charAt(0).toUpperCase()}</span>
+                <span className="sp-chat-main">
+                  <b>{chat.buyer || `Pembeli ${chat.buyerId}`}</b>
+                  <span>{chat.last}</span>
+                </span>
+                <span className="sp-chat-side">
+                  <small>{chatTime(chat.lastAt)}</small>
+                  {(chat.unread > 0 || chat.fromBuyer) && <i>{chat.unread || 1}</i>}
+                </span>
+              </button>
+            ))}
+          </div>
+        ))}      </div>
       <div className="sp-chat-thread">
         {!active ? (
           <div className="sp-empty">Pilih percakapan</div>
@@ -626,7 +678,7 @@ function ReturnsTab() {
 
 function MarketplaceShopee() {
   const [status, setStatus] = useState<{ connected: boolean; shopName?: string } | null>(null)
-  const [main, setMain] = useState<'orders' | 'products' | 'chat' | 'returns'>('orders')
+  const [main, setMain] = useState<'orders' | 'products' | 'returns'>('orders')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -652,7 +704,7 @@ function MarketplaceShopee() {
           <span>{status?.connected ? status.shopName || 'Terhubung' : 'Belum terhubung'}</span>
         </div>
         {status?.connected && <nav aria-label="Menu Shopee">
-          {([['orders', 'Pesanan'], ['products', 'Produk'], ['chat', 'Chat'], ['returns', 'Pengembalian']] as const).map(([id, label]) => (
+          {([['orders', 'Pesanan'], ['products', 'Produk'], ['returns', 'Pengembalian']] as const).map(([id, label]) => (
             <button key={id} type="button" className={main === id ? 'on' : ''} onClick={() => setMain(id)}>{label}</button>
           ))}
         </nav>}
@@ -668,7 +720,6 @@ function MarketplaceShopee() {
       )}
       {status?.connected && main === 'orders' && <OrdersTab />}
       {status?.connected && main === 'products' && <ProductsTab />}
-      {status?.connected && main === 'chat' && <ChatTab />}
       {status?.connected && main === 'returns' && <ReturnsTab />}
     </div>
   )

@@ -119,3 +119,22 @@
 }
 .sp-count { margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: #fde4de; color: #d73211; font-size: 0.72rem; font-weight: 700; }
 .sp-tabs button.on .sp-count { background: #ee4d2d; color: #fff; }
+
+.sp-chat-tabs { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #eee; position: sticky; top: 0; background: #fff; z-index: 1; }
+.sp-chat-list .sp-chat-tabs button { display: block; text-align: center; border: 0; border-bottom: 2px solid transparent; padding: 0.7rem 0.4rem; color: #555; font-weight: 500; }
+.sp-chat-list .sp-chat-tabs button.on { color: var(--or); border-bottom-color: var(--or); }
+.sp-dot { display: inline-block; position: static !important; width: 7px; height: 7px; padding: 0 !important; margin-left: 4px; vertical-align: middle; background: var(--or); border-radius: 50%; }
+.sp-chat-list .sp-chat-group-head { display: block; width: 100%; padding: 0.6rem 0.9rem; background: #fafafa; font-weight: 600; color: #333; }
+.sp-chat-list .sp-chat-row { display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 0.6rem; width: 100%; }
+.sp-avatar { width: 38px; height: 38px; border-radius: 50%; background: #e6e6e6; color: #666; display: grid; place-items: center; font-weight: 700; }
+.sp-chat-main { display: grid; min-width: 0; gap: 0.1rem; }
+.sp-chat-main b { font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-chat-side { display: grid; justify-items: end; gap: 0.25rem; }
+.sp-chat-side small { color: #888; font-size: 0.72rem; }
+.sp-chat-list .sp-chat-side i { position: static; }
+.sp-focus { outline: 2px solid var(--or); box-shadow: 0 0 0 4px rgba(238, 77, 45, 0.15); }
+.ops-sub { margin: 1rem 0 0.4rem; font-size: 0.95rem; color: #333; }
+.ops-person { display: flex; align-items: center; gap: 0.6rem; padding: 0.7rem 1rem; }
+.ops-right { margin-left: auto; font-size: 0.8rem; }
+.ops-dot { width: 10px; height: 10px; border-radius: 50%; background: #bbb; flex: none; }
+.ops-dot.on { background: #1fb15a; box-shadow: 0 0 0 4px rgba(31, 177, 90, 0.2); }

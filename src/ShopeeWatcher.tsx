@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from './posFirebase'
+import { playSound, pushToast, setOps } from './opsStore'
 
 type WatchOrder = { orderSn: string; buyer: string; shipBy: number }
+type WatchChat = { id: string; buyer: string; last: string; unread: number; fromBuyer: boolean; latestId: string; lastAt: number }
+const CHAT_SEEN_KEY = 'shopeeSeenChatMsgs'
+const UNANSWERED_DAYS = 7
 
 const POLL_MS = 30000
 const ALARM_WINDOW_MS = 12 * 60 * 1000
@@ -22,33 +26,8 @@ function loadSeen() {
 // and loud_alarm.mp3 when an order is within 12 minutes of its ship-by deadline.
 export default function ShopeeWatcher() {
   const [urgent, setUrgent] = useState<WatchOrder[]>([])
-  const [fresh, setFresh] = useState<WatchOrder[]>([])
   const seen = useRef<Set<string> | null>(loadSeen())
   const lastAlarm = useRef<Record<string, number>>({})
-  const newSound = useRef<HTMLAudioElement | null>(null)
-  const alarmSound = useRef<HTMLAudioElement | null>(null)
-
-  useEffect(() => {
-    newSound.current = new Audio('/order_masuk.mp3')
-    alarmSound.current = new Audio('/loud_alarm.mp3')
-    const unlock = () => {
-      for (const audio of [newSound.current, alarmSound.current]) {
-        if (!audio) continue
-        audio.muted = true
-        void audio.play().then(() => {
-          audio.pause()
-          audio.currentTime = 0
-          audio.muted = false
-        }).catch(() => {
-          audio.muted = false
-        })
-      }
-      window.removeEventListener('pointerdown', unlock)
-    }
-    window.addEventListener('pointerdown', unlock)
-    return () => window.removeEventListener('pointerdown', unlock)
-  }, [])
-
   useEffect(() => {
     let stopped = false
 
@@ -63,9 +42,12 @@ export default function ShopeeWatcher() {
         orders.forEach((order) => next.add(order.orderSn))
         seen.current = next
         localStorage.setItem(SEEN_KEY, JSON.stringify([...next].slice(-500)))
+        setOps({ shopeeToShip: orders.length })
         if (added.length > 0) {
-          setFresh(added)
-          void newSound.current?.play().catch(() => undefined)
+          playSound('/order_masuk.mp3')
+          for (const order of added) {
+            pushToast({ icon: '🛒', title: 'Pesanan Shopee baru', body: order.buyer || 'Pembeli', sticky: true, actions: [{ label: order.orderSn, panel: 'marketplace', orderSn: order.orderSn }] })
+          }
         }
 
         const now = Date.now()
@@ -76,7 +58,7 @@ export default function ShopeeWatcher() {
           close.forEach((order) => {
             lastAlarm.current[order.orderSn] = now
           })
-          void alarmSound.current?.play().catch(() => undefined)
+          playSound('/loud_alarm.mp3')
         }
       } catch {
         // Shopee not connected or temporary failure: stay silent and retry on the next tick.
@@ -91,7 +73,46 @@ export default function ShopeeWatcher() {
     }
   }, [])
 
-  if (urgent.length === 0 && fresh.length === 0) return null
+  useEffect(() => {
+    let stopped = false
+    let seenMsgs: Set<string>
+    try {
+      seenMsgs = new Set<string>(JSON.parse(localStorage.getItem(CHAT_SEEN_KEY) ?? '[]') as string[])
+    } catch {
+      seenMsgs = new Set<string>()
+    }
+
+    async function pollChats() {
+      try {
+        const result = await httpsCallable<unknown, { conversations: WatchChat[] }>(functions, 'shopeeChats')()
+        if (stopped) return
+        const since = Date.now() - UNANSWERED_DAYS * 86400000
+        const waiting = result.data.conversations.filter((chat) => (chat.fromBuyer || chat.unread > 0) && chat.lastAt >= since)
+        setOps({ shopeeUnreadChats: waiting.length })
+        const incoming = waiting.filter((chat) => !seenMsgs.has(`${chat.id}:${chat.latestId}`))
+        if (incoming.length > 0) {
+          incoming.forEach((chat) => seenMsgs.add(`${chat.id}:${chat.latestId}`))
+          localStorage.setItem(CHAT_SEEN_KEY, JSON.stringify([...seenMsgs].slice(-300)))
+          playSound('/chatmasuk.mp3')
+          for (const chat of incoming.slice(0, 4)) {
+            pushToast({ icon: '💬', title: `Chat Shopee: ${chat.buyer || 'Pembeli'}`, body: chat.last, sticky: false, actions: [{ label: 'Buka chat', panel: 'chat' }] })
+          }
+          if (incoming.length > 4) pushToast({ icon: '💬', title: `+${incoming.length - 4} chat Shopee lain belum dibalas`, body: '', sticky: false, actions: [{ label: 'Buka chat', panel: 'chat' }] })
+        }
+      } catch {
+        // Not connected or temporary failure.
+      }
+    }
+
+    void pollChats()
+    const timer = window.setInterval(() => void pollChats(), 20000)
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  if (urgent.length === 0) return null
 
   return (
     <div className="sp-watch" role="alert">
@@ -102,12 +123,7 @@ export default function ShopeeWatcher() {
           <button type="button" onClick={() => setUrgent([])}>Tutup</button>
         </div>
       )}
-      {fresh.length > 0 && (
-        <div className="sp-watch-new">
-          <b>🛒 Pesanan Shopee baru: {fresh.map((order) => order.buyer || order.orderSn).join(', ')}</b>
-          <button type="button" onClick={() => setFresh([])}>OK</button>
-        </div>
-      )}
+
     </div>
   )
 }

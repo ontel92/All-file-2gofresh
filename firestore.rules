@@ -99,6 +99,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /presence/{uid} {
+      allow read: if ownerOrSupervisor();
+      allow create, update: if activeStaff()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'role', 'panel', 'lastSeen']);
+      allow delete: if false;
+    }
+
     match /shiftState/{docId} {
       allow read: if activeStaff();
       allow write: if false;

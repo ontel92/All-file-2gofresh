@@ -3,6 +3,7 @@ import { collection, limit, onSnapshot, orderBy, query } from 'firebase/firestor
 import { httpsCallable } from 'firebase/functions'
 import { database } from './firebase'
 import { functions } from './posFirebase'
+import { playSound, pushToast } from './opsStore'
 import './Chat.css'
 
 export type StoreChat = {
@@ -27,7 +28,6 @@ export function useStoreChats(enabled: boolean) {
   const [chats, setChats] = useState<StoreChat[]>([])
   const [soundOn, setSoundOn] = useState(false)
   const known = useRef<Record<string, number> | null>(null)
-  const audio = useRef<AudioContext | null>(null)
 
   useEffect(() => {
     if (!enabled) return
@@ -48,30 +48,20 @@ export function useStoreChats(enabled: boolean) {
         const previous = known.current
         known.current = Object.fromEntries(next.map((chat) => [chat.id, chat.unreadStaff]))
         if (previous && next.some((chat) => chat.unreadStaff > (previous[chat.id] ?? 0))) {
-          beep()
+          playSound('/chatmasuk.mp3')
+          for (const chat of next.filter((entry) => entry.unreadStaff > (previous[entry.id] ?? 0))) {
+            pushToast({ icon: '💬', title: `Live Chat: ${chat.customerName || 'Pelanggan'}`, body: chat.lastMessage, sticky: false, actions: [{ label: 'Buka chat', panel: 'chat' }] })
+          }
         }
         setChats(next)
       },
       () => setChats([]),
     )
 
-    function beep() {
-      const context = audio.current
-      if (!context) return
-      const oscillator = context.createOscillator()
-      const gain = context.createGain()
-      oscillator.frequency.value = 880
-      gain.gain.value = 0.15
-      oscillator.connect(gain)
-      gain.connect(context.destination)
-      oscillator.start()
-      oscillator.stop(context.currentTime + 0.25)
-    }
   }, [enabled])
 
   function enableSound() {
-    audio.current ??= new AudioContext()
-    void audio.current.resume()
+    playSound('/chatmasuk.mp3')
     setSoundOn(true)
   }
 

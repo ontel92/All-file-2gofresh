@@ -432,20 +432,36 @@ export const shopeeReturns = onCall(options, async (request) => {
 
 export const shopeeChats = onCall(options, async (request) => {
   await requireStaff(request)
-  const result = obj(
-    (await shopCall('/api/v2/sellerchat/get_conversation_list', { direction: 'latest', type: 'all', page_size: 25 })).response,
-  )
-  return {
-    conversations: list(result.conversations).map((entry) => ({
-      id: String(entry.conversation_id ?? ''),
-      buyerId: Number(entry.to_id ?? 0),
-      buyer: String(entry.to_name ?? ''),
-      last: String(obj(entry.latest_message_content).text ?? ''),
-      unread: Number(entry.unread_count ?? 0),
-    })),
+  const all: Json[] = []
+  let params: Record<string, string | number> = { direction: 'older', type: 'all', page_size: 60, next_timestamp_nano: `${Date.now()}000000` }
+  for (let page = 0; page < 4; page += 1) {
+    const result = obj((await shopCall('/api/v2/sellerchat/get_conversation_list', params)).response)
+    all.push(...list(result.conversations))
+    const paging = obj(result.page_result)
+    const cursor = obj(paging.next_cursor)
+    if (page === 0) logger.info('shopeeChats paging', { paging: JSON.stringify(paging).slice(0, 300), first: list(result.conversations).slice(0, 3).map((entry) => `${String(entry.to_name)}:${String(entry.last_message_timestamp)}:${String(entry.latest_message_from_id)}`) })
+    if (paging.more !== true || !cursor.next_message_time_nano) break
+    params = { direction: 'older', type: 'all', page_size: 60, next_timestamp_nano: String(cursor.next_message_time_nano) }
   }
+  const seen = new Set<string>()
+  const conversations = all
+    .map((entry) => {
+      const buyerId = Number(entry.to_id ?? 0)
+      return {
+        id: String(entry.conversation_id ?? ''),
+        buyerId,
+        buyer: String(entry.to_name ?? ''),
+        last: String(obj(entry.latest_message_content).text ?? '') || `[${String(entry.latest_message_type ?? 'pesan')}]`,
+        unread: Number(entry.unread_count ?? 0),
+        fromBuyer: Number(entry.latest_message_from_id ?? 0) === buyerId,
+        latestId: String(entry.latest_message_id ?? ''),
+        lastAt: Math.round(Number(entry.last_message_timestamp ?? 0) / 1e6),
+      }
+    })
+    .filter((chat) => chat.id && !seen.has(chat.id) && !!seen.add(chat.id))
+    .sort((a, b) => b.lastAt - a.lastAt)
+  return { conversations }
 })
-
 export const shopeeMessages = onCall(options, async (request) => {
   await requireStaff(request)
   const conversationId = str(input(request).conversationId, 'Percakapan', 40)

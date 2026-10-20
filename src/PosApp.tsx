@@ -28,7 +28,12 @@ import PendingOrders from './PendingOrders'
 import PrinterGate from './PrinterGate'
 import YubiCalculator from './YubiCalculator'
 import ShopeeWatcher from './ShopeeWatcher'
-import LiveChat, { useStoreChats } from './LiveChat'
+import { useStoreChats } from './LiveChat'
+import AllChats from './AllChats'
+import StaffOnline, { useOnlineStaff, usePresence } from './StaffOnline'
+import MarketplaceTiktok from './MarketplaceTiktok'
+import OpsToasts from './OpsToasts'
+import { playSound, pushToast, setOps, useOps } from './opsStore'
 import MarketplaceShopee from './MarketplaceShopee'
 import RetailMembers from './RetailMembers'
 import { useMemberData } from './memberData'
@@ -78,19 +83,21 @@ type StockCountInput = {
 }
 
 const posNavigation = [
-  { id: 'retail', label: 'Kasir Retail', icon: '▣', group: 'KASIR', ready: true },
-  { id: 'b2b', label: 'Kasir B2B', icon: '♧', group: 'KASIR', ready: true },
-  { id: 'pending', label: 'Pending Order', icon: '↻', group: 'KASIR', ready: true },
-  { id: 'expenses', label: 'Pengeluaran Kas', icon: '▰', group: 'KAS & SHIFT', ready: true },
-  { id: 'closing', label: 'Closing Shift', icon: '▣', group: 'KAS & SHIFT', ready: true },
-  { id: 'sales-history', label: 'Riwayat Penjualan', icon: '▧', group: 'LAPORAN & DATA', ready: true },
-  { id: 'catalog', label: 'Katalog Produk', icon: '▤', group: 'LAPORAN & DATA', ready: true },
-  { id: 'stock', label: 'Stok Produk', icon: '▦', group: 'LAPORAN & DATA', ready: true },
-  { id: 'b2b-members', label: 'Member B2B', icon: '☺', group: 'MEMBER', ready: true },
-  { id: 'retail-members', label: 'Member Retail', icon: '☺', group: 'MEMBER', ready: true },
-  { id: 'web-order', label: 'Web Order', icon: '◎', group: 'ONLINE', ready: true },
-  { id: 'marketplace', label: 'Marketplace Shopee', icon: '▱', group: 'ONLINE', ready: true },
-  { id: 'chat', label: 'Live Chat Store', icon: '●', group: 'ONLINE', ready: true },
+  { id: 'retail', label: 'Kasir Retail', icon: '🛒', group: 'KASIR', ready: true },
+  { id: 'b2b', label: 'Kasir B2B', icon: '💻', group: 'KASIR', ready: true },
+  { id: 'pending', label: 'Pending Order', icon: '⏳', group: 'KASIR', ready: true },
+  { id: 'expenses', label: 'Pengeluaran Kas', icon: '🧾', group: 'KAS & SHIFT', ready: true },
+  { id: 'closing', label: 'Closing Shift', icon: '📕', group: 'KAS & SHIFT', ready: true },
+  { id: 'sales-history', label: 'Riwayat Penjualan', icon: '📜', group: 'LAPORAN & DATA', ready: true },
+  { id: 'catalog', label: 'Katalog Produk', icon: '📒', group: 'LAPORAN & DATA', ready: true },
+  { id: 'stock', label: 'Stok Produk', icon: '📦', group: 'LAPORAN & DATA', ready: true },
+  { id: 'b2b-members', label: 'Member B2B', icon: '🪪', group: 'MEMBER', ready: true },
+  { id: 'retail-members', label: 'Member Retail', icon: '🎫', group: 'MEMBER', ready: true },
+  { id: 'web-order', label: 'Web Order', icon: '🌐', group: 'ONLINE', ready: true },
+  { id: 'marketplace', label: 'Marketplace Shopee', icon: '🟧', group: 'ONLINE', ready: true },
+  { id: 'tiktok', label: 'Marketplace Tokopedia/TikTok', icon: 'ᕷ', group: 'ONLINE', ready: true },
+  { id: 'monitor', label: 'Kasir Online', icon: '👩🏻‍💻', group: 'KAS & SHIFT', ready: true },
+  { id: 'chat', label: 'Semua Chat', icon: '🗫', group: 'ONLINE', ready: true },
 ] as const
 
 type InventoryItem = {
@@ -286,7 +293,7 @@ function PosLogin() {
     <main className="pos-login-page">
       <a className="pos-back-link" href="/">← Kembali ke 2goFresh</a>
       <section className="pos-login-card">
-        <div className="pos-logo-mark" aria-hidden="true">2<span>✳</span></div>
+        <div className="pos-logo-mark" aria-hidden="true">2go<span>✳</span></div>
         <p className="pos-eyebrow">RUANG TOKO · 2GOFRESH</p>
         <h1>Selamat datang.</h1>
         <p className="pos-login-copy">
@@ -377,7 +384,7 @@ function ChangeTemporaryPassword({
   return (
     <main className="pos-login-page">
       <section className="pos-login-card">
-        <div className="pos-logo-mark" aria-hidden="true">2<span>✳</span></div>
+        <div className="pos-logo-mark" aria-hidden="true">2go<span>✳</span></div>
         <p className="pos-eyebrow">RUANG TOKO · 2GOFRESH</p>
         <h1>Ganti password.</h1>
         <p className="pos-login-copy">
@@ -932,7 +939,10 @@ function PosApp() {
   const [search, setSearch] = useState('')
   const [savingSku, setSavingSku] = useState('')
   const [bulkMode, setBulkMode] = useState<'off' | 'count' | 'add'>('off')
-  const [activePanel, setActivePanel] = useState('retail')
+  const [activePanel, setActivePanel] = useState(() => {
+    const requestedPanel = new URLSearchParams(window.location.search).get('panel')
+    return requestedPanel || 'retail'
+  })
   const [cart, setCart] = useState<CartLine[]>([])
   const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([])
   const [resumed, setResumed] = useState<{ id: string; label: string } | null>(null)
@@ -950,6 +960,40 @@ function PosApp() {
   const webOrderData = useWebOrders(dataReady)
   const chatData = useStoreChats(dataReady)
   const enableChatSound = chatData.enableSound
+  const ops = useOps()
+  const isManager = profile?.role === 'owner' || profile?.role === 'supervisor'
+  usePresence(dataReady, user?.uid, profile?.displayName ?? '', profile?.role ?? '', activePanel)
+  const staffOnline = useOnlineStaff(dataReady && isManager)
+  const knownWebOrders = useRef<Set<string> | null>(null)
+  useEffect(() => {
+    const seen = knownWebOrders.current
+    const fresh = webOrderData.orders.filter((order) => order.status === 'new' && !seen?.has(order.id))
+    knownWebOrders.current = new Set(webOrderData.orders.map((order) => order.id))
+    if (!seen || fresh.length === 0) return
+    playSound('/order_masuk.mp3')
+    for (const order of fresh) {
+      pushToast({ icon: '🛒', title: `Web Order baru ${order.orderNo}`, body: `${order.customerName || 'Pelanggan'} · ${currency.format(order.total)}`, sticky: true, actions: [{ label: 'Buka Web Order', panel: 'web-order' }] })
+    }
+  }, [webOrderData.orders])
+
+  useEffect(() => {
+    if (!ops.navRequest) return
+    const target = ops.navRequest
+    setOps({ navRequest: '' })
+    setActivePanel(target)
+    const url = new URL(window.location.href)
+    url.searchParams.set('panel', target)
+    window.history.pushState({ panel: target }, '', url)
+    if (!window.matchMedia('(min-width: 901px)').matches) setSidebarOpen(false)
+  }, [ops.navRequest])
+
+  useEffect(() => {
+    const syncPanel = () => {
+      setActivePanel(new URLSearchParams(window.location.search).get('panel') || 'retail')
+    }
+    window.addEventListener('popstate', syncPanel)
+    return () => window.removeEventListener('popstate', syncPanel)
+  }, [])
   const ownedShiftRef = useRef('')
   const closedHereRef = useRef(false)
 
@@ -1259,6 +1303,9 @@ function PosApp() {
 
   function selectPanel(panel: string) {
     setActivePanel(panel)
+    const url = new URL(window.location.href)
+    url.searchParams.set('panel', panel)
+    window.history.pushState({ panel }, '', url)
     if (!window.matchMedia('(min-width: 901px)').matches) {
       setSidebarOpen(false)
     }
@@ -1500,10 +1547,10 @@ function PosApp() {
   const ownsShift = shiftHolder?.cashierUid === user.uid
   const canManageStock = profile.role !== 'cashier'
   const visibleNavigation = posNavigation.filter(
-    (item) => canManageStock || (item.ready && item.id !== 'stock' && item.id !== 'b2b-members'),
+    (item) => item.id === 'monitor' ? canManageStock : canManageStock || (item.ready && item.id !== 'stock' && item.id !== 'b2b-members'),
   )
   const navBadge = (id: string) =>
-    id === 'retail-members' ? memberData.pendingCount : id === 'web-order' ? webOrderData.newCount : id === 'chat' ? chatData.unreadTotal : 0
+    id === 'retail-members' ? memberData.pendingCount : id === 'web-order' ? webOrderData.newCount : id === 'chat' ? chatData.unreadTotal + ops.shopeeUnreadChats : id === 'marketplace' ? ops.shopeeToShip : id === 'monitor' ? staffOnline.online.length : 0
   const canManageStaff = profile.role === 'owner' || profile.role === 'supervisor'
   const roleLabel = {
     owner: 'Owner · akses penuh',
@@ -1556,7 +1603,7 @@ function PosApp() {
           {sidebarOpen ? '‹' : '☰'}
         </button>
         <a className="pos-brand" href="/" aria-label="2goFresh POS">
-          <span className="pos-logo-mark" aria-hidden="true">2<span>✳</span></span>
+          <span className="pos-logo-mark" aria-hidden="true">2go<span>✳</span></span>
           <span className="pos-brand-copy">
             <strong>2goFresh POS</strong>
             <small><i aria-hidden="true" /> SINKRONISASI · {catalog.length} PRODUK</small>
@@ -1597,10 +1644,13 @@ function PosApp() {
                 {(index === 0 || visibleNavigation[index - 1].group !== item.group) && (
                   <p className="pos-nav-group">{item.group}</p>
                 )}
-                <button
-                  type="button"
+                <a
+                  href={`${window.location.pathname}?panel=${encodeURIComponent(item.id)}`}
                   className={`pos-nav-item${activePanel === item.id ? ' active' : ''}${item.ready ? '' : ' soon'}`}
-                  onClick={() => selectPanel(item.id)}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    selectPanel(item.id)
+                  }}
                   aria-current={activePanel === item.id ? 'page' : undefined}
                 >
                   <span className="pos-nav-icon" aria-hidden="true">{item.icon}</span>
@@ -1611,21 +1661,24 @@ function PosApp() {
                   ) : (
                     !item.ready && <small>Segera Hadir</small>
                   )}
-                </button>
+                </a>
               </Fragment>
             ))}
           </nav>
           {canManageStaff && (
             <div className="pos-sidebar-footer">
-              <button
-                type="button"
+              <a
+                href={`${window.location.pathname}?panel=staff`}
                 className={`pos-nav-item${activePanel === 'staff' ? ' active' : ''}`}
-                onClick={() => selectPanel('staff')}
+                onClick={(event) => {
+                  event.preventDefault()
+                  selectPanel('staff')
+                }}
                 aria-current={activePanel === 'staff' ? 'page' : undefined}
               >
                 <span className="pos-nav-icon" aria-hidden="true">♙</span>
                 <span>Anggota Kasir</span>
-              </button>
+              </a>
             </div>
           )}
         </aside>
@@ -1689,8 +1742,13 @@ function PosApp() {
             <WebOrders orders={webOrderData.orders} />
           ) : activePanel === 'marketplace' ? (
             <MarketplaceShopee />
+          ) : activePanel === 'monitor' && canManageStock ? (
+            <StaffOnline shift={shiftData.state && shiftData.shift ? { cashierUid: shiftData.state.cashierUid, cashierName: shiftData.state.cashierName, sales: shiftData.shift.totals.sales, count: shiftData.shift.totals.count, openedAt: shiftData.shift.openedAt } : shiftData.state ? { cashierUid: shiftData.state.cashierUid, cashierName: shiftData.state.cashierName, sales: 0, count: 0, openedAt: null } : null} online={staffOnline.online} offline={staffOnline.offline} now={staffOnline.now} />
+          ) : activePanel === 'tiktok' ? (
+            <MarketplaceTiktok />
           ) : activePanel === 'chat' ? (
-            <LiveChat
+            <AllChats
+              storeUnread={chatData.unreadTotal}
               chats={chatData.chats}
               soundOn={chatData.soundOn}
               onEnableSound={chatData.enableSound}
@@ -1855,6 +1913,7 @@ function PosApp() {
         </section>
       </div>
       <ShopeeWatcher />
+      <OpsToasts />
       <YubiCalculator />
     </main>
   )
