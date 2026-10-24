@@ -8,6 +8,29 @@ service firebase.storage {
         && firestore.get(/databases/(default)/documents/staff/$(request.auth.uid)).data.active == true;
     }
 
+    function productManager() {
+      return activeStaff()
+        && firestore.get(/databases/(default)/documents/staff/$(request.auth.uid)).data.role in ['owner', 'supervisor'];
+    }
+
+    match /product-images/{fileName} {
+      allow read: if true;
+      allow create: if productManager()
+        && resource == null
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType in ['image/jpeg', 'image/png', 'image/webp']
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.sku is string
+        && request.resource.metadata.sku.matches('^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$')
+        && (
+          fileName == request.resource.metadata.sku + '.jpg'
+          || fileName == request.resource.metadata.sku + '.jpeg'
+          || fileName == request.resource.metadata.sku + '.png'
+          || fileName == request.resource.metadata.sku + '.webp'
+        );
+      allow update, delete: if false;
+    }
+
     // Bukti pembayaran QRIS dari pelanggan: hanya pemilik yang boleh mengunggah, staf yang boleh melihat.
     match /proofs/{uid}/{fileName} {
       allow create: if request.auth != null

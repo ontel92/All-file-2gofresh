@@ -1,10 +1,10 @@
-.yubi { position: fixed; right: 14px; bottom: 14px; z-index: 50; display: grid; justify-items: end; gap: 0.5rem; font-family: 'Zen Kaku Gothic New', 'Segoe UI', sans-serif; }
+.yubi { position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom)); z-index: 50; display: grid; justify-items: end; gap: 0.5rem; font-family: 'Zen Kaku Gothic New', 'Segoe UI', sans-serif; }
 .yubi-fab { position: relative; border: 0; background: transparent; padding: 0; cursor: pointer; animation: yubi-walk 9s ease-in-out infinite; }
 .yubi-fab img { display: block; width: clamp(64px, 16vw, 84px); height: auto; filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.3)); animation: yubi-hop 2.6s ease-in-out infinite; transform-origin: 50% 100%; }
 .yubi-fab:hover img { animation-duration: 0.9s; }
 .yubi-fab b { position: absolute; top: 0; right: 0; background: #d93025; color: #fff; border-radius: 999px; min-width: 20px; padding: 0 6px; font-size: 0.75rem; }
 .yubi-nudge { position: relative; max-width: 220px; border: 1px solid #e2dac7; background: #fffdf8; color: #23201b; border-radius: 14px 14px 4px 14px; padding: 0.55rem 0.8rem; font: inherit; font-size: 0.86rem; text-align: left; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); cursor: pointer; animation: yubi-pop 0.3s ease-out; }
-.yubi-panel { width: min(350px, calc(100vw - 28px)); max-height: min(540px, 72vh); display: grid; grid-template-rows: auto 1fr auto; background: #fffdf8; border-radius: 16px; box-shadow: 0 10px 34px rgba(0, 0, 0, 0.28); overflow: hidden; }
+.yubi-panel { width: min(350px, calc(100vw - 28px)); max-height: min(540px, 72vh); max-height: min(540px, calc(100dvh - 100px)); display: grid; grid-template-rows: auto 1fr auto; background: #fffdf8; border-radius: 16px; box-shadow: 0 10px 34px rgba(0, 0, 0, 0.28); overflow: hidden; }
 .yubi-panel header { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.8rem; background: #28384f; color: #fff; }
 .yubi-panel header img { object-fit: contain; }
 .yubi-panel header div { flex: 1; display: grid; }
@@ -31,4 +31,10 @@
 @keyframes yubi-hop { 0%, 100% { transform: translateY(0) scale(1, 1); } 45% { transform: translateY(-9px) scale(0.98, 1.03); } 60% { transform: translateY(0) scale(1.04, 0.96); } }
 @keyframes yubi-walk { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-26px); } }
 @keyframes yubi-pop { from { opacity: 0; transform: translateY(6px) scale(0.95); } to { opacity: 1; transform: none; } }
+@media (max-width: 560px) {
+  .yubi { right: max(8px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); }
+  .yubi-nudge { display: none; }
+  .yubi-fab img { width: 44px; }
+  .yubi-panel { width: min(350px, calc(100vw - 16px)); }
+}
 @media (prefers-reduced-motion: reduce) { .yubi-fab, .yubi-fab img { animation: none; } }

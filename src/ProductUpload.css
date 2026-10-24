@@ -1,0 +1,44 @@
+.pu { max-width: 1120px; margin: 0 auto; padding: 0.6rem; }
+.pu .pos-page-heading { margin: 0 0 1rem; }
+.pu-form { display: grid; gap: 1rem; }
+.pu-form fieldset { min-width: 0; margin: 0; padding: 1rem; border: 1px solid #d8e4d3; border-radius: 14px; background: #fff; }
+.pu-form legend { padding: 0 0.4rem; color: #176b48; font-weight: 700; }
+.pu-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.8rem; }
+.pu-field { display: grid; align-content: start; gap: 0.3rem; min-width: 0; color: #35443b; font-size: 0.86rem; font-weight: 600; }
+.pu-field > span b { color: #d45c2c; }
+.pu-field input, .pu-field select, .pu-field textarea { width: 100%; min-height: 42px; padding: 0.55rem 0.7rem; border: 1px solid #cbd9c6; border-radius: 8px; background: #fff; color: #26352d; font: inherit; }
+.pu-field textarea { resize: vertical; }
+.pu-field input[type="file"] { padding: 0.4rem; font-size: 0.78rem; }
+.pu-field small { color: #748276; font-size: 0.74rem; font-weight: 400; }
+.pu-warning, .pu-error, .pu-success, .pu-note { margin: 0; padding: 0.75rem 0.9rem; border-radius: 9px; font-size: 0.88rem; }
+.pu-warning { border: 1px solid #edbb63; background: #fff7df; color: #7c4a00; }
+.pu-error { border: 1px solid #e6a6a0; background: #fff1ef; color: #a22b22; }
+.pu-success { border: 1px solid #a8d3ac; background: #edf8ec; color: #245b2b; }
+.pu-submit { justify-self: start; min-height: 44px; padding: 0.65rem 1.3rem; }
+.pu-note { background: #f4f6f2; color: #647064; }
+.pu-missing { display: grid; gap: 0.8rem; margin-top: 1.5rem; padding: 1rem; border: 1px solid #d8e4d3; border-radius: 14px; background: #f8fbf6; }
+.pu-missing-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.pu-missing-heading h2 { margin: 0.2rem 0; color: #26372c; font-size: 1.15rem; }
+.pu-missing-heading p:not(.pos-eyebrow) { margin: 0.25rem 0; color: #6b786d; font-size: 0.84rem; }
+.pu-missing-list { display: grid; gap: 0.55rem; }
+.pu-missing-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1.2fr) auto; align-items: center; gap: 0.75rem; padding: 0.75rem; border: 1px solid #e0e9dc; border-radius: 10px; background: #fff; }
+.pu-missing-row > div { display: grid; gap: 0.25rem; min-width: 0; }
+.pu-missing-row small { color: #748276; font-size: 0.75rem; overflow-wrap: anywhere; }
+.pu-missing-row input { min-width: 0; font: inherit; font-size: 0.78rem; }
+.pu-missing-row button { min-height: 38px; }
+.pu-publish-toggle { padding: 0.9rem; border: 1px solid #c9dfc5; border-radius: 12px; background: #f1f8ee; }
+.pu-publish-toggle label { display: flex; align-items: flex-start; gap: 0.65rem; color: #2b4633; cursor: pointer; }
+.pu-publish-toggle input, .pu-logistics input { width: 18px; height: 18px; margin: 0.1rem 0 0; accent-color: #23824d; }
+.pu-publish-toggle span { display: grid; gap: 0.3rem; }
+.pu-publish-toggle small, .pu-logistics small { color: #6c7a6e; font-size: 0.8rem; font-weight: 400; }
+.pu-shopee { display: grid; gap: 0.9rem; }
+.pu-shopee .pu-span-all { grid-column: 1 / -1; }
+.pu-shopee-requirements, .pu-shopee-dimensions { padding-top: 0.8rem; border-top: 1px solid #e6ede3; }
+.pu-shopee select[multiple] { min-height: 100px; }
+.pu-logistics { display: grid; gap: 0.6rem; padding: 0.85rem; border: 1px solid #e1e9de; border-radius: 10px; background: #fbfdf9; }
+.pu-logistics-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.6rem; padding: 0.45rem 0; border-top: 1px solid #edf1ea; }
+.pu-logistics-row label { display: flex; align-items: center; gap: 0.5rem; color: #35443b; }
+.pu-logistics-row select { min-width: 170px; min-height: 38px; padding: 0.4rem 0.6rem; border: 1px solid #cbd9c6; border-radius: 8px; background: #fff; color: #26352d; font: inherit; }
+@media (max-width: 760px) { .pu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .pu-missing-row { grid-template-columns: 1fr; } .pu-missing-heading { align-items: flex-start; } }
+@media (max-width: 480px) { .pu-grid { grid-template-columns: 1fr; } .pu-form fieldset { padding: 0.75rem; } .pu-missing { padding: 0.75rem; } }

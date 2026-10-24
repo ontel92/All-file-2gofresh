@@ -98,6 +98,28 @@
 .sp-row { display: grid; grid-template-columns: minmax(0, 2.6fr) 1fr 1.1fr 1fr 1fr; gap: 0.8rem; padding: 0.4rem 1rem 0.8rem; align-items: start; }
 .sp-items .sp-line { grid-template-columns: 56px 1fr auto; padding: 0.4rem 0; }
 .sp-items .sp-line img, .sp-items .sp-noimg { width: 56px; height: 56px; }
+
+.sp-variant-batch { display: grid; gap: 0.75rem; }
+.sp-variant-batch > header, .sp-variant-result { display: grid; gap: 0.5rem; background: #fff; padding: 1rem; border-radius: 10px; }
+.sp-variant-batch h2, .sp-variant-batch p { margin: 0; }
+.sp-variant-batch textarea { width: 100%; resize: vertical; padding: 0.6rem; border: 1px solid #d9d9d9; border-radius: 6px; }
+.sp-variant-candidates { display: grid; gap: 0.35rem; max-height: 420px; overflow-y: auto; padding: 0.75rem; background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; }
+.sp-variant-candidate-actions { position: sticky; top: -0.75rem; z-index: 1; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; padding: 0.2rem 0 0.6rem; background: #fff; }
+.sp-variant-candidate { display: flex; align-items: flex-start; gap: 0.65rem; padding: 0.55rem; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
+.sp-variant-candidate input { margin-top: 0.2rem; }
+.sp-variant-candidate span { display: grid; gap: 0.15rem; }
+.sp-variant-candidate small { color: #757575; }
+.sp-variant-card { padding-bottom: 0.8rem; }
+.sp-variant-card > .sp-error, .sp-variant-card > .sp-muted { margin: 0.6rem 1rem; }
+.sp-variant-list { display: grid; gap: 0.4rem; padding: 0.6rem 1rem; font-size: 0.86rem; }
+.sp-variant-list > span { color: #555; }
+.sp-variant-list label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 180px); align-items: center; gap: 0.5rem; }
+.sp-variant-list input { padding: 0.45rem; border: 1px solid #d9d9d9; border-radius: 4px; }
+.sp-variant-disable { display: flex; align-items: flex-start; gap: 0.5rem; background: #fff8e1; padding: 0.7rem 1rem; border-radius: 6px; font-size: 0.88rem; }
+.sp-variant-result p { margin: 0.3rem 0; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .sp-variant-list label { grid-template-columns: 1fr; }
+}
 .sp-x { color: #555; font-size: 0.9rem; }
 .sp-col { display: grid; gap: 0.2rem; font-size: 0.88rem; padding-top: 0.5rem; }
 .sp-col b { font-weight: 600; }

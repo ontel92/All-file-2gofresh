@@ -14,12 +14,12 @@ import './shop/shop.css'
 
 const pageSize = 24
 const bestSellerList = [
-  { title: 'Paket Sayur Capjay', sku: 'vege-7444', category: 'VEGETABLE', emoji: '🥗' },
-  { title: 'Paket Sayur Sop', sku: 'vege-7445', category: 'VEGETABLE', emoji: '🥕' },
-  { title: 'Tempe & Tahu', sku: 'groc-3258', category: 'GROCERY', emoji: '🍢' },
-  { title: 'Udang', sku: 'fish-5465', category: 'FISH', emoji: '🦐' },
-  { title: 'Beef Shortplate', sku: 'meat-4263', category: 'MEAT', emoji: '🥩' },
-  { title: 'Kangkung, Sawi, Bayam', sku: 'vege-8116', category: 'VEGETABLE', emoji: '🥬' },
+  { title: 'Paket Sayur Capjay', sku: 'vege-7444', category: 'VEGETABLE', label: 'Sayur segar', emoji: '🥗' },
+  { title: 'Paket Sayur Sop', sku: 'vege-7445', category: 'VEGETABLE', label: 'Sayur segar', emoji: '🥕' },
+  { title: 'Tempe & Tahu', sku: 'groc-3258', category: 'GROCERY', label: 'Lauk harian', emoji: '🍢' },
+  { title: 'Udang', sku: 'fish-5465', category: 'FISH', label: 'Seafood', emoji: '🦐' },
+  { title: 'Beef Shortplate', sku: 'meat-4263', category: 'MEAT', label: 'Daging sapi', emoji: '🥩' },
+  { title: 'Kangkung, Sawi, Bayam', sku: 'vege-8116', category: 'VEGETABLE', label: 'Sayur segar', emoji: '🥬' },
 ]
 const cartKey = 'gofresh-cart-v1'
 const pendingKey = 'gofresh-pending-payment-v1'
@@ -215,9 +215,12 @@ function App() {
   }, [products, category, search])
 
   const bestSellers = useMemo(
-    () =>
-      bestSellerList.map((item) => ({ ...item, image: productMap.get(item.sku)?.imageUrl ?? '' })),
-    [productMap],
+    () => bestSellerList.map((item) => ({
+      ...item,
+      product: productMap.get(item.sku),
+      categoryCount: products.filter((product) => product.category === item.category).length,
+    })),
+    [productMap, products],
   )
   const vipProduct = productMap.get(vipCardSku)
   const cartLines = Object.entries(cart)
@@ -278,10 +281,15 @@ function App() {
         </nav>
         <div className="top-actions">
           <button type="button" className="icon-btn" onClick={() => setAccount('login')}>
-            {customer.registered ? (customer.profile?.name.split(' ')[0] ?? 'Akun') : 'Masuk / Registrasi'}
+            <span className="account-label-wide">
+              {customer.registered ? (customer.profile?.name.split(' ')[0] ?? 'Akun') : 'Masuk / Registrasi'}
+            </span>
+            <span className="account-label-compact">
+              {customer.registered ? (customer.profile?.name.split(' ')[0] ?? 'Akun') : 'Masuk'}
+            </span>
           </button>
           <button type="button" className="icon-btn cart-btn" onClick={() => setCartOpen(true)} aria-label="Buka keranjang">
-            Keranjang
+            <span>Keranjang</span> 🛒
             {cartCount > 0 && <b>{cartCount}</b>}
           </button>
         </div>
@@ -308,30 +316,38 @@ function App() {
         </div>
       </section>
 
-      <section className="section best" aria-label="Produk terlaris">
+      <section className="section best" aria-label="Pilihan segar 2goFresh">
         <div className="section-head">
-          <h2>🔥 Produk Terlaris</h2>
-          <span className="muted small">Favorit pelanggan 2goFresh</span>
+          <h2>🌿 Pilihan Segar 2goFresh</h2>
+          <span className="muted small">Pilih produk atau jelajahi kategorinya</span>
         </div>
         <div className="best-grid">
-          {bestSellers.map((item, index) => (
+          {bestSellers.map((item) => (
             <button
               key={item.title}
               type="button"
               className="best-card"
+              aria-label={`Lihat ${item.product?.name ?? item.title} di kategori ${item.category}`}
               onClick={() => {
                 setCategory(item.category)
-                setSearch('')
+                setSearch(item.product?.name ?? '')
                 setVisible(pageSize)
                 document.getElementById('produk')?.scrollIntoView({ behavior: 'smooth' })
               }}
             >
-              <span className="best-rank">#{index + 1}</span>
+              <span className="best-category">{item.label}</span>
               <span className="best-photo">
-                {item.image ? <img src={item.image} alt={item.title} loading="lazy" /> : <span className="best-emoji">{item.emoji}</span>}
+                {item.product?.imageUrl ? (
+                  <img src={item.product.imageUrl} alt="" loading="lazy" decoding="async" />
+                ) : (
+                  <span className="best-emoji" aria-hidden="true">{item.emoji}</span>
+                )}
               </span>
               <b>{item.title}</b>
-              <small>Lihat produk →</small>
+              <span className="best-card-meta">
+                {item.product ? `${currency.format(item.product.retailPrice)} / ${item.product.unit}` : `${item.categoryCount} produk`}
+              </span>
+              <small>{item.categoryCount} produk · Lihat pilihan →</small>
             </button>
           ))}
         </div>
@@ -434,7 +450,8 @@ function App() {
         <div>
           <strong>2goFresh</strong>
           <p>Tentang Toko Kami</p>
-          <p>Grosir & eceran sayur segar, buah pilihan, serta sembako harian. Melayani pembelian Retail dan B2B dengan kualitas terbaik langsung dari tangan pertama. Belanja mudah secara offline maupun online via POS & Marketplace terpadu. Always Fresh, Always Trusted! 🥬✨</p>
+          <p>Grosir & eceran sayur segar, buah pilihan, serta sembako harian. Melayani pembelian Retail dan B2B dengan kualitas terbaik langsung dari tangan pertama. Belanja mudah secara offline maupun online via POS & Marketplace terpadu. Always Fresh, Always Trusted!</p>
+          <br />© 2026 2gofresh. All rights reserved.
         </div>
         <div>
           <p>{storeInfo.address}</p>
@@ -451,11 +468,11 @@ function App() {
         <div className="drawer-wrap" onClick={() => setCartOpen(false)}>
           <aside className="drawer" role="dialog" aria-label="Keranjang" onClick={(event) => event.stopPropagation()}>
             <header>
-              <h2>Keranjang</h2>
+              <h2>Keranjang 🛒</h2>
               <button type="button" className="modal-close static" aria-label="Tutup" onClick={() => setCartOpen(false)}>×</button>
             </header>
             <div className="drawer-body">
-              {cartLines.length === 0 && <p className="muted">Keranjang masih kosong.</p>}
+              {cartLines.length === 0 && <p className="muted">Keranjang 🛒 masih kosong.</p>}
               {cartLines.map(({ product, quantity }) => (
                 <div key={product.sku} className="cart-row">
                   <div className="cart-thumb">{product.imageUrl ? <img src={product.imageUrl} alt="" loading="lazy" /> : '🧺'}</div>

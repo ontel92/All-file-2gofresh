@@ -8,10 +8,11 @@ type WatchChat = { id: string; buyer: string; last: string; unread: number; from
 const CHAT_CURSOR_KEY = 'shopeeChatCursorV2'
 const UNANSWERED_DAYS = 7
 
-const POLL_MS = 30000
+const POLL_MS = 120000
 const ALARM_WINDOW_MS = 12 * 60 * 1000
 const ALARM_REPEAT_MS = 2 * 60 * 1000
 const SEEN_KEY = 'shopeeSeenOrders'
+const CHAT_POLL_MS = 60000
 
 function loadSeen() {
   try {
@@ -39,8 +40,11 @@ export default function ShopeeWatcher() {
   const lastAlarm = useRef<Record<string, number>>({})
   useEffect(() => {
     let stopped = false
+    let polling = false
 
     async function poll() {
+      if (stopped || document.visibilityState !== 'visible' || polling) return
+      polling = true
       try {
         const result = await httpsCallable<unknown, { orders: WatchOrder[] }>(functions, 'shopeeOrders')({ status: 'READY_TO_SHIP', cursor: '' })
         if (stopped) return
@@ -71,22 +75,32 @@ export default function ShopeeWatcher() {
         }
       } catch {
         // Shopee not connected or temporary failure: stay silent and retry on the next tick.
+      } finally {
+        polling = false
       }
     }
 
     void poll()
     const timer = window.setInterval(() => void poll(), POLL_MS)
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void poll()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       stopped = true
       window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [])
 
   useEffect(() => {
     let stopped = false
+    let polling = false
     let cursor = loadChatCursor()
 
     async function pollChats() {
+      if (stopped || document.visibilityState !== 'visible' || polling) return
+      polling = true
       try {
         const result = await httpsCallable<unknown, { conversations: WatchChat[] }>(functions, 'shopeeChats')()
         if (stopped) return
@@ -125,14 +139,21 @@ export default function ShopeeWatcher() {
         }
       } catch {
         // Not connected or temporary failure.
+      } finally {
+        polling = false
       }
     }
 
     void pollChats()
-    const timer = window.setInterval(() => void pollChats(), 20000)
+    const timer = window.setInterval(() => void pollChats(), CHAT_POLL_MS)
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void pollChats()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       stopped = true
       window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [])
 

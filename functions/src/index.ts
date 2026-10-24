@@ -7,6 +7,7 @@ import {
 import { initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
 import { FieldValue, getFirestore } from 'firebase-admin/firestore'
+import { getStorage } from 'firebase-admin/storage'
 import type { Transaction } from 'firebase-admin/firestore'
 import { logger } from 'firebase-functions'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
@@ -30,7 +31,7 @@ const chatCallableOptions = { ...shiftCallableOptions, memory: '512MiB' } as con
 const spreadsheetId = '1Z3GxcqyB2DxGmfJcMuWvjDFKRRv7jceAlHPvfQ_zHR8'
 const collectionName = 'catalogProducts'
 const sheetRange = 'A:W'
-const spreadsheetScope = 'https://www.googleapis.com/auth/spreadsheets.readonly'
+const spreadsheetScope = 'https://www.googleapis.com/auth/spreadsheets'
 const batchLimit = 450
 const cashierRoster = [
   { loginId: 'dinda', displayName: 'Dinda' },
@@ -178,6 +179,17 @@ function imageCell(value: unknown): string {
   return /^https:\/\/[^\s]{8,1500}$/.test(url) ? url : ''
 }
 
+function supportedProductImage(path: string, contentType: string | undefined): boolean {
+  const contentTypes: Record<string, string> = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    webp: 'image/webp',
+  }
+  const extension = path.split('.').pop() ?? ''
+  return contentTypes[extension] === contentType
+}
+
 function parseCatalog(values: unknown[][]): CatalogProduct[] {
   if (values.length < 2) {
     throw new Error('The spreadsheet has no product rows; refusing to clear the catalog.')
@@ -244,7 +256,6 @@ function parseCatalog(values: unknown[][]): CatalogProduct[] {
       imageUrl: imageCell(row[22]),
     })
   })
-
   if (duplicateSkus.length > 0) {
     throw new Error(`Duplicate SKUs found: ${duplicateSkus.join('; ')}.`)
   }
@@ -334,6 +345,7 @@ export const syncCatalogFromSheets = onSchedule(
     const existingById = new Map(
       existing.docs.map((document) => [document.id, document.data()]),
     )
+
     const desiredById = new Map(
       products.map((product) => [product.sku.toLowerCase(), product]),
     )
@@ -2208,4 +2220,339 @@ export const closeShift = onCall({ ...shiftCallableOptions, secrets: [reportSmtp
   const report = await buildShiftReport(summary.shiftId, staff.displayName ?? '')
   const emailSent = await sendShiftReportEmail(summary.shiftId, report.text, report.cashierName)
   return { ...summary, reportText: report.text, emailSent }
+})
+
+type NewCatalogProduct = {
+  minQty: number
+  sku: string
+  category: string
+  name: string
+  unit: string
+  hpp: number
+  shrinkage: number
+  effectiveHpp: number
+  retailMargin: number
+  b2bMargin: number
+  retailPrice: number
+  b2bPrice: number
+  retail500: number | null
+  retail250: number | null
+  marketplaceFee: number
+  marketplacePrice: number
+  marketplace500: number | null
+  marketplace250: number | null
+  marketplace100: number | null
+  marketplace50: number | null
+  marketplace10: number | null
+  marketplace5: number | null
+  imagePath: string
+}
+
+function requiredText(value: unknown, label: string, max = 160): string {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.trim().length > max) {
+    throw new HttpsError('invalid-argument', `${label} wajib diisi (maksimal ${max} karakter).`)
+  }
+  return value.trim()
+}
+
+function productNumber(value: unknown, label: string, options: { min?: number; max?: number; integer?: boolean } = {}): number {
+  const number = typeof value === 'number' ? value : Number(value)
+  const min = options.min ?? 0
+  const max = options.max ?? 1_000_000_000
+  if (
+    !Number.isFinite(number) ||
+    number < min ||
+    number > max ||
+    (options.integer && !Number.isInteger(number))
+  ) {
+    throw new HttpsError('invalid-argument', `${label} tidak valid.`)
+  }
+  return number
+}
+
+function optionalProductPrice(value: unknown, label: string): number | null {
+  if (value === null || value === undefined || value === '') return null
+  return productNumber(value, label, { min: 1, integer: true })
+}
+
+export const addMasterProduct = onCall(shiftCallableOptions, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Login diperlukan.')
+  await requireStaffRole(request.auth.uid, ['owner', 'supervisor'])
+  const input = callableData(request.data)
+  const sku = requiredText(input.sku, 'SKU', 100)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(sku)) {
+    throw new HttpsError('invalid-argument', 'Format SKU hanya boleh huruf, angka, titik, garis bawah, dan tanda hubung.')
+  }
+  const imagePath = requiredText(input.imagePath, 'Foto produk', 300)
+  if (!['jpg', 'jpeg', 'png', 'webp'].some((extension) => imagePath === `product-images/${sku}.${extension}`)) {
+    throw new HttpsError('invalid-argument', 'Nama file foto harus sama persis dengan SKU, misalnya SKU.jpg.')
+  }
+
+  const product: NewCatalogProduct = {
+    minQty: productNumber(input.minQty, 'MIN_QTY', { min: 0.0001, max: 1_000_000 }),
+    sku,
+    category: requiredText(input.category, 'KATEGORI', 60).toUpperCase(),
+    name: requiredText(input.name, 'NAMA PRODUK'),
+    unit: requiredText(input.unit, 'SATUAN', 24).toUpperCase(),
+    hpp: productNumber(input.hpp, 'HPP Awal', { min: 1, integer: true }),
+    shrinkage: productNumber(input.shrinkage, 'Est. Penyusutan', { min: 0, max: 1 }),
+    effectiveHpp: productNumber(input.effectiveHpp, 'HPP EFEKTIF', { min: 1, integer: true }),
+    retailMargin: productNumber(input.retailMargin, 'Margin Retail', { min: 0, max: 1 }),
+    b2bMargin: productNumber(input.b2bMargin, 'Margin B2B', { min: 0, max: 1 }),
+    retailPrice: productNumber(input.retailPrice, 'HARGA RETAIL', { min: 1, integer: true }),
+    b2bPrice: productNumber(input.b2bPrice, 'HARGA B2B', { min: 1, integer: true }),
+    retail500: optionalProductPrice(input.retail500, 'Harga Retail 500g'),
+    retail250: optionalProductPrice(input.retail250, 'Harga Retail 250g'),
+    marketplaceFee: productNumber(input.marketplaceFee, 'Fee MP', { min: 0, max: 1 }),
+    marketplacePrice: productNumber(input.marketplacePrice, 'HARGA MARKETPLACE', { min: 1, integer: true }),
+    marketplace500: optionalProductPrice(input.marketplace500, 'Harga Marketplace 500gr'),
+    marketplace250: optionalProductPrice(input.marketplace250, 'Harga Marketplace 250gr'),
+    marketplace100: optionalProductPrice(input.marketplace100, 'Harga Marketplace 100gr'),
+    marketplace50: optionalProductPrice(input.marketplace50, 'Harga Marketplace 50g'),
+    marketplace10: optionalProductPrice(input.marketplace10, 'Harga Marketplace 10g'),
+    marketplace5: optionalProductPrice(input.marketplace5, 'Harga Marketplace 5g'),
+    imagePath,
+  }
+  if (product.effectiveHpp < product.hpp || product.marketplacePrice < product.effectiveHpp) {
+    throw new HttpsError('failed-precondition', 'HPP efektif atau harga marketplace lebih rendah dari HPP awal. Periksa kembali master harga.')
+  }
+
+  const database = getFirestore()
+  const skuId = product.sku.toLowerCase()
+  const lockRef = database.collection('catalogProductUploads').doc(skuId)
+  const lock = await database.runTransaction(async (transaction) => {
+    const existing = await transaction.get(lockRef)
+    if (existing.exists) throw new HttpsError('already-exists', 'SKU ini sudah pernah dikirim ke master produk.')
+    transaction.create(lockRef, { sku: product.sku, status: 'writing', createdBy: request.auth!.uid, createdAt: FieldValue.serverTimestamp() })
+    return true
+  })
+  if (!lock) throw new HttpsError('aborted', 'Tidak dapat mengunci SKU.')
+
+  const imageFile = getStorage().bucket().file(imagePath)
+  let appended = false
+  try {
+    const [metadata] = await imageFile.getMetadata()
+    if (
+      !supportedProductImage(imagePath, metadata.contentType) ||
+      Number(metadata.size ?? 0) > 5 * 1024 * 1024 ||
+      metadata.metadata?.uploaderUid !== request.auth.uid ||
+      metadata.metadata?.sku !== product.sku
+    ) {
+      throw new HttpsError('failed-precondition', 'Foto tidak ditemukan, terlalu besar, atau bukan unggahan dari sesi ini.')
+    }
+    const token = String(metadata.metadata?.firebaseStorageDownloadTokens ?? '').split(',')[0]
+    if (!token) throw new HttpsError('failed-precondition', 'Token unduhan foto tidak tersedia.')
+    const imageUrl = `https://firebasestorage.googleapis.com/v0/b/${getStorage().bucket().name}/o/${encodeURIComponent(imagePath)}?alt=media&token=${token}`
+
+    const auth = new google.auth.GoogleAuth({ scopes: [spreadsheetScope] })
+    const sheets = google.sheets({ version: 'v4', auth })
+    const current = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: 'A:B',
+      valueRenderOption: 'UNFORMATTED_VALUE',
+    })
+    const currentRows = current.data.values ?? []
+    if (currentRows.some((row, index) => index > 0 && String(row[1] ?? '').trim().toLowerCase() === skuId)) {
+      throw new HttpsError('already-exists', `SKU ${product.sku} sudah ada di Google Sheets.`)
+    }
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: sheetRange,
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: {
+        values: [[
+          product.minQty, product.sku, product.category, product.name, product.unit,
+          product.hpp, product.shrinkage, product.effectiveHpp, product.retailMargin,
+          product.b2bMargin, product.retailPrice, product.b2bPrice, product.retail500 ?? '',
+          product.retail250 ?? '', product.marketplaceFee, product.marketplacePrice,
+          product.marketplace500 ?? '', product.marketplace250 ?? '', product.marketplace100 ?? '',
+          product.marketplace50 ?? '', product.marketplace10 ?? '', product.marketplace5 ?? '',
+          imageUrl,
+        ]],
+      },
+    })
+    appended = true
+    await lockRef.update({ status: 'written', imageUrl, completedAt: FieldValue.serverTimestamp() })
+    logger.info('Product appended to Google Sheets master.', { sku: product.sku, actorUid: request.auth.uid })
+    return { sku: product.sku, imageUrl, syncNote: 'Produk akan muncul di katalog setelah sinkronisasi berikutnya.' }
+  } catch (error) {
+    if (!appended) {
+      await lockRef.delete()
+      await imageFile.delete({ ignoreNotFound: true }).catch((cleanupError: unknown) => {
+        logger.error('Failed to remove orphan product image after Sheet append failure.', { sku: product.sku, cleanupError })
+      })
+    }
+    logger.error('Product upload to Google Sheets failed.', { sku: product.sku, error })
+    if (error instanceof HttpsError) throw error
+    throw new HttpsError('failed-precondition', 'Gagal menulis produk ke Google Sheets. Pastikan service account catalog-sync-runtime memiliki akses Editor.')
+  }
+})
+
+type MissingSheetPhoto = { sku: string; name: string; category: string; rowNumber: number }
+
+async function getProductSheetClient() {
+  const auth = new google.auth.GoogleAuth({ scopes: [spreadsheetScope] })
+  return google.sheets({ version: 'v4', auth })
+}
+
+export const setNewProductOpeningStock = onCall(shiftCallableOptions, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Login diperlukan.')
+  await requireStaffRole(request.auth.uid, ['owner', 'supervisor'])
+  const input = callableData(request.data)
+  const sku = requiredText(input.sku, 'SKU', 100)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(sku)) {
+    throw new HttpsError('invalid-argument', 'Format SKU tidak valid.')
+  }
+  const quantity = productNumber(input.quantity, 'Stok awal POS', { min: 0.001, max: 1_000_000 })
+  const sheets = await getProductSheetClient()
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: sheetRange,
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  })
+  const matches = (result.data.values ?? [])
+    .map((row, index) => ({ row, rowNumber: index + 1 }))
+    .filter(({ row, rowNumber }) => rowNumber > 1 && String(row[1] ?? '').trim().toLowerCase() === sku.toLowerCase())
+  if (matches.length !== 1) {
+    throw new HttpsError(matches.length ? 'failed-precondition' : 'not-found', matches.length ? `SKU ${sku} muncul lebih dari sekali di master produk.` : `SKU ${sku} belum ditemukan di master Google Sheets.`)
+  }
+  const unit = String(matches[0].row[4] ?? '').trim().toUpperCase()
+  if (!unit) throw new HttpsError('failed-precondition', `Satuan POS untuk SKU ${sku} belum tersedia di master.`)
+  if (unit !== 'KG' && !Number.isInteger(quantity)) {
+    throw new HttpsError('invalid-argument', `Stok awal untuk satuan ${unit} harus bilangan bulat.`)
+  }
+
+  const database = getFirestore()
+  const inventoryRef = database.collection('inventory').doc(sku.toLowerCase())
+  const movementRef = database.collection('stockMovements').doc()
+  const stock = await database.runTransaction(async (transaction) => {
+    const current = await transaction.get(inventoryRef)
+    if (current.exists) {
+      const onHand = Number(current.get('onHand'))
+      const existingUnit = String(current.get('unit') ?? '').trim().toUpperCase()
+      if (!Number.isFinite(onHand) || existingUnit !== unit) {
+        throw new HttpsError('failed-precondition', `Data inventory SKU ${sku} tidak konsisten dengan satuan master.`)
+      }
+      if (onHand > 0) return { sku, unit, onHand, alreadySet: true }
+    }
+    const previousOnHand = current.exists ? Number(current.get('onHand')) : 0
+    transaction.set(inventoryRef, {
+      sku,
+      onHand: quantity,
+      unit,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: request.auth!.uid,
+    })
+    transaction.create(movementRef, {
+      sku,
+      unit,
+      movementType: current.exists ? 'stock-count' : 'opening',
+      previousOnHand,
+      newOnHand: quantity,
+      quantityDelta: quantity - previousOnHand,
+      reason: 'Stok awal produk saat upload langsung ke Shopee',
+      actorUid: request.auth!.uid,
+      createdAt: FieldValue.serverTimestamp(),
+    })
+    return { sku, unit, onHand: quantity, alreadySet: false }
+  })
+  logger.info('Opening stock prepared for direct Shopee product upload.', { ...stock, actorUid: request.auth.uid })
+  return stock
+})
+
+export const listProductsMissingImages = onCall(shiftCallableOptions, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Login diperlukan.')
+  await requireStaffRole(request.auth.uid, ['owner', 'supervisor'])
+  const sheets = await getProductSheetClient()
+  let rows: unknown[][] = []
+  try {
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: sheetRange,
+      valueRenderOption: 'UNFORMATTED_VALUE',
+    })
+    rows = result.data.values ?? []
+  } catch (error) {
+    logger.error('Unable to read products missing images from Google Sheets.', error)
+    throw new HttpsError('failed-precondition', 'Daftar foto produk gagal dibaca dari Google Sheets. Pastikan service account kasir memiliki akses Editor ke master produk.')
+  }
+  const products: MissingSheetPhoto[] = []
+  rows.slice(1).forEach((row, index) => {
+    const sku = String(row[1] ?? '').trim()
+    const photo = String(row[22] ?? '').trim()
+    if (!sku || imageCell(photo)) return
+    products.push({
+      sku,
+      category: String(row[2] ?? ''),
+      name: String(row[3] ?? ''),
+      rowNumber: index + 2,
+    })
+  })
+  return { products, count: products.length }
+})
+
+export const setMasterProductImage = onCall(shiftCallableOptions, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Login diperlukan.')
+  await requireStaffRole(request.auth.uid, ['owner', 'supervisor'])
+  const input = callableData(request.data)
+  const sku = requiredText(input.sku, 'SKU', 100)
+  const imagePath = requiredText(input.imagePath, 'Lokasi foto', 180)
+  if (!['jpg', 'jpeg', 'png', 'webp'].some((extension) => imagePath === `product-images/${sku}.${extension}`)) {
+    throw new HttpsError('invalid-argument', 'Nama file foto harus sama persis dengan SKU.')
+  }
+  const file = getStorage().bucket().file(imagePath)
+  let metadata: {
+    contentType?: string
+    size?: string | number
+    metadata?: Record<string, string | number | boolean | null>
+  }
+  try {
+    const [verifiedMetadata] = await file.getMetadata()
+    metadata = verifiedMetadata
+  } catch (error) {
+    logger.error('Uploaded product image metadata unavailable.', { sku, error })
+    const code = typeof error === 'object' && error !== null && 'code' in error ? Number(error.code) : 0
+    if (code === 404) throw new HttpsError('not-found', 'Foto produk tidak ditemukan di Firebase Storage.')
+    throw new HttpsError('unavailable', 'Tidak dapat memverifikasi foto produk di Firebase Storage.')
+  }
+  if (
+    !supportedProductImage(imagePath, metadata.contentType) ||
+    Number(metadata.size ?? 0) > 5 * 1024 * 1024 ||
+    metadata.metadata?.sku !== sku
+  ) {
+    throw new HttpsError('failed-precondition', 'Metadata foto, SKU, atau ukuran file tidak valid.')
+  }
+  const token = String(metadata.metadata?.firebaseStorageDownloadTokens ?? '').split(',')[0]
+  if (!token) throw new HttpsError('failed-precondition', 'Token unduhan foto tidak tersedia.')
+  const imageUrl = `https://firebasestorage.googleapis.com/v0/b/${getStorage().bucket().name}/o/${encodeURIComponent(imagePath)}?alt=media&token=${token}`
+  const sheets = await getProductSheetClient()
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: sheetRange,
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  })
+  const rows = result.data.values ?? []
+  const matching = rows
+    .map((row, index) => ({ row, rowNumber: index + 1 }))
+    .filter(({ row, rowNumber }) => rowNumber > 1 && String(row[1] ?? '').trim() === sku)
+  if (matching.length !== 1) {
+    throw new HttpsError(matching.length ? 'failed-precondition' : 'not-found', matching.length ? `SKU ${sku} muncul lebih dari sekali di Google Sheets.` : `SKU ${sku} tidak ditemukan di Google Sheets.`)
+  }
+  const [{ row, rowNumber }] = matching
+  if (imageCell(String(row[22] ?? '').trim())) {
+    throw new HttpsError('already-exists', `SKU ${sku} sudah memiliki link foto di master.`)
+  }
+  const updated = await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `W${rowNumber}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[imageUrl]] },
+  })
+  if (updated.data.updatedCells !== 1) {
+    throw new HttpsError('internal', 'Google Sheets tidak mengonfirmasi perubahan link foto.')
+  }
+  logger.info('Master product photo link updated.', { sku, rowNumber, actorUid: request.auth.uid })
+  return { sku, imageUrl, rowNumber }
 })

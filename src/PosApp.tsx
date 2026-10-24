@@ -23,6 +23,8 @@ import B2bCashier from './B2bCashier'
 import type { B2bMember, B2bReceipt, B2bSaleRequest } from './B2bCashier'
 import B2bMembers from './B2bMembers'
 import CatalogPanel from './CatalogPanel'
+import ProductUpload from './ProductUpload'
+import MarketplaceMargin from './MarketplaceMargin'
 import SalesHistory from './SalesHistory'
 import PendingOrders from './PendingOrders'
 import PrinterGate from './PrinterGate'
@@ -90,11 +92,13 @@ const posNavigation = [
   { id: 'closing', label: 'Closing Shift', icon: '📕', group: 'KAS & SHIFT', ready: true },
   { id: 'sales-history', label: 'Riwayat Penjualan', icon: '📜', group: 'LAPORAN & DATA', ready: true },
   { id: 'catalog', label: 'Katalog Produk', icon: '📒', group: 'LAPORAN & DATA', ready: true },
+  { id: 'product-upload', label: 'Upload Produk', icon: '⬆', group: 'LAPORAN & DATA', ready: true },
   { id: 'stock', label: 'Stok Produk', icon: '📦', group: 'LAPORAN & DATA', ready: true },
   { id: 'b2b-members', label: 'Member B2B', icon: '🪪', group: 'MEMBER', ready: true },
   { id: 'retail-members', label: 'Member Retail', icon: '🎫', group: 'MEMBER', ready: true },
   { id: 'web-order', label: 'Web Order', icon: '🌐', group: 'ONLINE', ready: true },
   { id: 'marketplace', label: 'Marketplace Shopee', icon: '🟧', group: 'ONLINE', ready: true },
+  { id: 'marketplace-margin', label: 'Margin Marketplace', icon: '📈', group: 'ONLINE', ready: true },
   { id: 'tiktok', label: 'Marketplace Tokopedia/TikTok', icon: 'ᕷ', group: 'ONLINE', ready: true },
   { id: 'monitor', label: 'Kasir Online', icon: '👩🏻‍💻', group: 'KAS & SHIFT', ready: true },
   { id: 'chat', label: 'Semua Chat', icon: '🗫', group: 'ONLINE', ready: true },
@@ -1605,7 +1609,7 @@ function PosApp() {
           </span>
         </a>
         <div className="pos-header-actions">
-          <div className="pos-user">
+          <div className="pos-user" role="group" aria-label={`Akun kasir ${profile.displayName}, ${roleLabel}`}>
             <span className="pos-avatar" aria-hidden="true">{profile.displayName.slice(0, 1).toUpperCase()}</span>
             <span className="pos-user-text">
               <strong>{profile.displayName}</strong>
@@ -1714,6 +1718,12 @@ function PosApp() {
             />
           ) : activePanel === 'catalog' ? (
             <CatalogPanel products={sortedCatalog} b2bPrices={b2bPrices} />
+          ) : activePanel === 'product-upload' && canManageStock && user ? (
+            <ProductUpload
+              categories={[...new Set(sortedCatalog.map((product) => product.category))].sort()}
+              units={[...new Set(sortedCatalog.map((product) => product.unit))].sort()}
+              uid={user.uid}
+            />
           ) : activePanel === 'sales-history' && user ? (
             <SalesHistory uid={user.uid} canSeeAll={canManageStock} canVoid={canManageStock} />
           ) : activePanel === 'b2b-members' ? (
@@ -1737,6 +1747,8 @@ function PosApp() {
             <WebOrders orders={webOrderData.orders} />
           ) : activePanel === 'marketplace' ? (
             <MarketplaceShopee />
+          ) : activePanel === 'marketplace-margin' ? (
+            <MarketplaceMargin />
           ) : activePanel === 'monitor' && canManageStock ? (
             <StaffOnline shift={shiftData.state && shiftData.shift ? { cashierUid: shiftData.state.cashierUid, cashierName: shiftData.state.cashierName, sales: shiftData.shift.totals.sales, count: shiftData.shift.totals.count, openedAt: shiftData.shift.openedAt } : shiftData.state ? { cashierUid: shiftData.state.cashierUid, cashierName: shiftData.state.cashierName, sales: 0, count: 0, openedAt: null } : null} online={staffOnline.online} offline={staffOnline.offline} now={staffOnline.now} />
           ) : activePanel === 'tiktok' ? (

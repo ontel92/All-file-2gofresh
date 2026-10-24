@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from './posFirebase'
 import { printShippingLabel, usePrinter } from './printer'
@@ -40,8 +40,28 @@ type Product = {
   models: { modelId: number; name: string; sku: string; price: number; stock: number }[]
 }
 
+type VariantTier = { grams: number; name: string; price: number; priceIndex: number }
+type VariantModel = { modelId: number; name: string; sku: string; price: number; stock: number; grams: number | null }
+type VariantCandidate = { itemId: number; sku: string; name: string; minQty: number }
+type VariantPlan = {
+  itemId: number
+  name: string
+  sku: string
+  eligible: boolean
+  message: string
+  unit?: string
+  minQty?: number
+  minGrams?: number
+  currentModels?: VariantModel[]
+  disabledBelowMinimum?: VariantModel[]
+  additions?: (VariantTier & { modelSku: string })[]
+  currentOptions?: string[]
+}
+
 const money = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 })
 const dateText = (ms: number) => (ms ? new Date(ms).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '-')
+const ORDER_REFRESH_MS = 120000
+const ORDER_COUNT_REFRESH_MS = 15 * 60 * 1000
 
 const orderTabs = [
   { id: 'ALL', label: 'Semua' },
@@ -195,6 +215,8 @@ function OrdersTab() {
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'deadline'>('newest')
   const [now, setNow] = useState(() => Date.now())
   const [counts, setCounts] = useState<Record<string, number>>({})
+  const orderRequestInFlight = useRef(false)
+  const countRequestInFlight = useRef(false)
   const printer = usePrinter()
   const { openOrderSn } = useOps()
 
@@ -214,6 +236,8 @@ function OrdersTab() {
   }, [orders, openOrderSn])
 
   const load = useCallback(async (status: string, next = '') => {
+    if (orderRequestInFlight.current) return
+    orderRequestInFlight.current = true
     setLoading(true)
     setError('')
     try {
@@ -225,15 +249,23 @@ function OrdersTab() {
       setError(message(failure))
       if (!next) setOrders([])
     } finally {
+      orderRequestInFlight.current = false
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void load(tab)
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load(tab)
-    const timer = window.setInterval(() => void load(tab), 30000)
-    return () => window.clearInterval(timer)
+    refresh()
+    const timer = window.setInterval(refresh, ORDER_REFRESH_MS)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+    }
   }, [tab, load])
 
   useEffect(() => {
@@ -243,17 +275,28 @@ function OrdersTab() {
 
   useEffect(() => {
     let stopped = false
-    const refresh = () =>
-      call<{ counts: Record<string, number> }>('shopeeOrderCounts')
-        .then((result) => {
-          if (!stopped) setCounts(result.counts)
-        })
-        .catch(() => undefined)
+    const refresh = async () => {
+      if (stopped || document.visibilityState !== 'visible' || countRequestInFlight.current) return
+      countRequestInFlight.current = true
+      try {
+        const result = await call<{ counts: Record<string, number> }>('shopeeOrderCounts')
+        if (!stopped) setCounts(result.counts)
+      } catch {
+        // Counts are refreshed on the next poll if Shopee is temporarily unavailable.
+      } finally {
+        countRequestInFlight.current = false
+      }
+    }
     void refresh()
-    const timer = window.setInterval(() => void refresh(), 60000)
+    const timer = window.setInterval(() => void refresh(), ORDER_COUNT_REFRESH_MS)
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refresh()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       stopped = true
       window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [])
 
@@ -676,9 +719,211 @@ function ReturnsTab() {
   )
 }
 
+function VariantBatchTab() {
+  const [candidates, setCandidates] = useState<VariantCandidate[]>([])
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [candidateOffset, setCandidateOffset] = useState(0)
+  const [candidateHasMore, setCandidateHasMore] = useState(false)
+  const [candidateBusy, setCandidateBusy] = useState(false)
+  const [candidateError, setCandidateError] = useState('')
+  const [plans, setPlans] = useState<VariantPlan[]>([])
+  const [stockByKey, setStockByKey] = useState<Record<string, string>>({})
+  const [disableBelowMin, setDisableBelowMin] = useState<Record<number, boolean>>({})
+  const [promoDisabled, setPromoDisabled] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<{ itemId: number; sku: string; added: string[]; disabled: string[]; modelIds: Record<string, number>; status: 'applied' | 'failed'; error?: string; mayBePartial?: boolean }[]>([])
+
+  const loadCandidates = useCallback(async (offset: number, append: boolean) => {
+    setCandidateBusy(true)
+    setCandidateError('')
+    try {
+      const response = await call<{ products: VariantCandidate[]; nextOffset: number; hasMore: boolean }>('shopeeVariantCandidates', { offset })
+      setCandidates((current) => append ? [...current, ...response.products] : response.products)
+      if (!append) setSelectedIds(response.products.map((product) => product.itemId))
+      setCandidateOffset(response.nextOffset)
+      setCandidateHasMore(response.hasMore)
+    } catch (failure) {
+      setCandidateError(message(failure))
+    } finally {
+      setCandidateBusy(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadCandidates(0, false)
+  }, [loadCandidates])
+
+  async function preview() {
+    if (selectedIds.length < 1 || selectedIds.length > 25) {
+      setError('Pilih 1 sampai 25 produk untuk membuat preview.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    setResult([])
+    setPlans([])
+    setPromoDisabled(false)
+    try {
+      const response = await call<{ plans: VariantPlan[] }>('shopeeVariantPreview', { itemIds: selectedIds })
+      setPlans(response.plans)
+      setDisableBelowMin(Object.fromEntries(response.plans.map((plan) => [plan.itemId, false])))
+      setStockByKey({})
+    } catch (failure) {
+      setError(message(failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function apply() {
+    setBusy(true)
+    setError('')
+    try {
+      const items = plans.filter((plan) => plan.eligible).map((plan) => ({
+        itemId: plan.itemId,
+        stockByGrams: Object.fromEntries((plan.additions ?? []).map((tier) => [
+          String(tier.grams),
+          Number(stockByKey[`${plan.itemId}:${tier.grams}`]),
+        ])),
+        disableBelowMinimum: disableBelowMin[plan.itemId] === true,
+      }))
+      const response = await call<{ results: typeof result }>('shopeeVariantApply', {
+        items,
+        confirmPromoDisabled: promoDisabled,
+      })
+      setResult(response.results)
+      await preview()
+      setResult(response.results)
+    } catch (failure) {
+      setError(message(failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const canApply = plans.some((plan) => plan.eligible)
+    && promoDisabled
+    && plans.filter((plan) => plan.eligible).every((plan) => (plan.additions ?? []).every((tier) => {
+      const stock = Number(stockByKey[`${plan.itemId}:${tier.grams}`])
+      return Number.isInteger(stock) && stock > 0
+    }))
+
+  return (
+    <section className="sp-variant-batch">
+      <header>
+        <h2>Varian Shopee dari Master</h2>
+        <p>Produk satuan KG dengan MIN_QTY di master ditampilkan otomatis dan diurutkan berdasarkan nama. Pilih maksimal 25 listing untuk satu batch preview. Harga usulan mengikuti tier marketplace master dan rentang tier dibatasi maksimal 7×.</p>
+        <p className="sp-warn">Stok varian baru wajib diisi sesuai stok fisik yang siap dijual. Tidak ada stok default. Listing yang sedang promo tidak boleh diterapkan.</p>
+      </header>
+      <div className="sp-variant-candidates">
+        <div className="sp-variant-candidate-actions">
+          <b>Produk KG + MIN_QTY · {candidates.length} dimuat · {selectedIds.length}/25 dipilih</b>
+          <button
+            type="button"
+            className="sp-btn ghost small"
+            disabled={candidateBusy || candidates.length === 0}
+            onClick={() => setSelectedIds(candidates.slice(0, 25).map((product) => product.itemId))}
+          >Pilih 25 pertama</button>
+        </div>
+        {candidateError && <p className="sp-error" role="alert">{candidateError}</p>}
+        {candidateBusy && candidates.length === 0 && <p className="sp-muted">Memuat daftar produk dari master...</p>}
+        {candidates.map((product) => {
+          const checked = selectedIds.includes(product.itemId)
+          return (
+            <label className="sp-variant-candidate" key={product.itemId}>
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={!checked && selectedIds.length >= 25}
+                onChange={(event) => setSelectedIds((current) => event.target.checked
+                  ? current.length < 25 ? [...current, product.itemId] : current
+                  : current.filter((itemId) => itemId !== product.itemId))}
+              />
+              <span><b>{product.name}</b><small>{product.sku} · ID {product.itemId} · MIN_QTY {product.minQty} kg</small></span>
+            </label>
+          )
+        })}
+        {candidateHasMore && <button type="button" className="sp-btn ghost wide" disabled={candidateBusy} onClick={() => void loadCandidates(candidateOffset, true)}>{candidateBusy ? 'Memuat...' : 'Muat 25 produk berikutnya'}</button>}
+        {!candidateBusy && candidates.length === 0 && !candidateError && <p className="sp-muted">Tidak ada listing aktif yang cocok dengan produk KG + MIN_QTY di master.</p>}
+      </div>
+      <button type="button" className="sp-btn" disabled={busy || selectedIds.length === 0} onClick={() => void preview()}>{busy ? 'Memeriksa...' : `Buat Preview (${selectedIds.length})`}</button>
+      {error && <p className="sp-error" role="alert">{error}</p>}
+      {plans.map((plan) => (
+        <article className="sp-order sp-variant-card" key={plan.itemId}>
+          <header>
+            <span><b>{plan.name || `Produk ${plan.itemId}`}</b><br />ID {plan.itemId} · SKU master {plan.sku || '-'}</span>
+            <span className={`sp-badge${plan.eligible ? '' : ' s-IN_CANCEL'}`}>{plan.eligible ? 'Siap ditinjau' : 'Perlu pemeriksaan'}</span>
+          </header>
+          {plan.message && <p className="sp-error">{plan.message}</p>}
+          {plan.eligible && (
+            <>
+              <p className="sp-muted">Satuan {plan.unit} · MIN_QTY {plan.minQty} kg ({plan.minGrams} g) · Opsi sekarang: {(plan.currentOptions ?? []).join(', ') || '-'}</p>
+              <div className="sp-variant-list">
+                <b>Varian yang sudah ada</b>
+                {(plan.currentModels ?? []).map((model) => (
+                  <span key={model.modelId}>{model.name || 'Tanpa nama'} · SKU {model.sku || '-'} · {money.format(model.price)} · stok {model.stock} {model.grams !== null && model.grams < (plan.minGrams ?? 0) ? '· di bawah MIN_QTY' : ''}</span>
+                ))}
+                <b>Varian baru yang disarankan</b>
+                {(plan.additions ?? []).length === 0 && <span>Tidak ada; ukuran yang memenuhi master sudah tersedia.</span>}
+                {(plan.additions ?? []).map((tier) => (
+                  <label key={tier.grams}>
+                    <span>{tier.name} · harga acuan {money.format(tier.price)} · SKU {tier.modelSku}</span>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={stockByKey[`${plan.itemId}:${tier.grams}`] ?? ''}
+                      onChange={(event) => setStockByKey((current) => ({ ...current, [`${plan.itemId}:${tier.grams}`]: event.target.value }))}
+                      placeholder="Isi stok fisik"
+                      aria-label={`Stok aktual ${tier.name} ${plan.name}`}
+                    />
+                  </label>
+                ))}
+              </div>
+              {(plan.disabledBelowMinimum ?? []).length > 0 && (
+                <label className="sp-variant-disable">
+                  <input
+                    type="checkbox"
+                    checked={disableBelowMin[plan.itemId] === true}
+                    onChange={(event) => setDisableBelowMin((current) => ({ ...current, [plan.itemId]: event.target.checked }))}
+                  />
+                  Hentikan penjualan opsi di bawah MIN_QTY dengan mengatur stok Shopee menjadi 0: {plan.disabledBelowMinimum?.map((model) => model.name).join(', ')}
+                </label>
+              )}
+            </>
+          )}
+        </article>
+      ))}
+      {plans.length > 0 && plans.some((plan) => plan.eligible) && (
+        <>
+          <label className="sp-variant-disable">
+            <input type="checkbox" checked={promoDisabled} onChange={(event) => setPromoDisabled(event.target.checked)} />
+            Saya memastikan promo sudah dihentikan untuk semua listing di batch ini.
+          </label>
+          <button type="button" className="sp-btn" disabled={busy || !canApply} onClick={() => void apply()}>
+            {busy ? 'Memproses batch...' : 'Terapkan Varian yang Disetujui'}
+          </button>
+        </>
+      )}
+      {result.length > 0 && (
+        <div className="sp-variant-result" role="status">
+          <b>Hasil penerapan dan verifikasi ID model</b>
+          {result.map((entry) => (
+            <p key={entry.itemId} className={entry.status === 'failed' ? 'sp-error' : 'sp-ok'}>
+              {entry.sku || 'SKU belum diketahui'} · ID produk {entry.itemId} · {entry.status === 'applied' ? `Ditambahkan: ${entry.added.join(', ') || 'tidak ada'} · ID model: ${Object.entries(entry.modelIds).map(([grams, modelId]) => `${grams}g=${modelId}`).join(', ') || '-'}` : entry.error}
+            </p>
+          ))}
+          <p className="sp-muted">SKU varian baru memakai format SKU master + berat, sehingga margin POS dapat menghitung HPP per berat.</p>
+        </div>
+      )}
+    </section>
+  )
+}
+
 function MarketplaceShopee() {
   const [status, setStatus] = useState<{ connected: boolean; shopName?: string } | null>(null)
-  const [main, setMain] = useState<'orders' | 'products' | 'returns'>('orders')
+  const [main, setMain] = useState<'orders' | 'products' | 'returns' | 'variants'>('orders')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -704,7 +949,7 @@ function MarketplaceShopee() {
           <span>{status?.connected ? status.shopName || 'Terhubung' : 'Belum terhubung'}</span>
         </div>
         {status?.connected && <nav aria-label="Menu Shopee">
-          {([['orders', 'Pesanan'], ['products', 'Produk'], ['returns', 'Pengembalian']] as const).map(([id, label]) => (
+          {([['orders', 'Pesanan'], ['products', 'Produk'], ['returns', 'Pengembalian'], ['variants', 'Varian dari Master']] as const).map(([id, label]) => (
             <button key={id} type="button" className={main === id ? 'on' : ''} onClick={() => setMain(id)}>{label}</button>
           ))}
         </nav>}
@@ -721,6 +966,7 @@ function MarketplaceShopee() {
       {status?.connected && main === 'orders' && <OrdersTab />}
       {status?.connected && main === 'products' && <ProductsTab />}
       {status?.connected && main === 'returns' && <ReturnsTab />}
+      {status?.connected && main === 'variants' && <VariantBatchTab />}
     </div>
   )
 }
