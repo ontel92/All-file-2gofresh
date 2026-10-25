@@ -3,7 +3,7 @@ import { collection, limit, onSnapshot, orderBy, query } from 'firebase/firestor
 import { httpsCallable } from 'firebase/functions'
 import { database } from './firebase'
 import { functions } from './posFirebase'
-import { playSound, pushToast } from './opsStore'
+import { pushToast } from './opsStore'
 import './Chat.css'
 
 export type StoreChat = {
@@ -48,10 +48,9 @@ export function useStoreChats(enabled: boolean) {
         const previous = known.current
         known.current = Object.fromEntries(next.map((chat) => [chat.id, chat.unreadStaff]))
         if (previous && next.some((chat) => chat.unreadStaff > (previous[chat.id] ?? 0))) {
-          playSound('/chatmasuk.mp3')
-          for (const chat of next.filter((entry) => entry.unreadStaff > (previous[entry.id] ?? 0))) {
-            pushToast({ icon: '💬', title: `Live Chat: ${chat.customerName || 'Pelanggan'}`, body: chat.lastMessage, sticky: false, actions: [{ label: 'Buka chat', panel: 'chat' }] })
-          }
+          next.filter((entry) => entry.unreadStaff > (previous[entry.id] ?? 0)).forEach((chat, index) => {
+            pushToast({ icon: '💬', title: `Live Chat: ${chat.customerName || 'Pelanggan'}`, body: chat.lastMessage, sticky: false, sound: index === 0 ? '/chatmasuk.mp3' : undefined, actions: [{ label: 'Buka chat', panel: 'chat' }] })
+          })
         }
         setChats(next)
       },

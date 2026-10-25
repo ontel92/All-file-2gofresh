@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from './posFirebase'
 import { printShippingLabel, usePrinter } from './printer'
-import { getOps, setOps, useOps } from './opsStore'
+import { SHIP_ALARM_WINDOW_MS, getOps, setOps, useOps } from './opsStore'
+import type { ShopeeStoreId } from './opsStore'
+import { effectiveUnread, markChatReadLocally } from './shopeeChatState'
 import './ShopeePanel.css'
 
 type Item = { itemId: number; modelId: number; name: string; variant: string; sku: string; quantity: number; price: number; image: string }
@@ -113,7 +115,22 @@ async function call<T>(name: string, data?: unknown) {
   return (await httpsCallable<unknown, T>(functions, name)(data)).data
 }
 
+const ShopeeStoreContext = createContext<ShopeeStoreId>('2gofresh')
+
+// Callable yang otomatis mengirim toko aktif; toko 2goFresh tetap tanpa field `store`.
+function useShopeeCall() {
+  const store = useContext(ShopeeStoreContext)
+  return useCallback(
+    <T,>(name: string, data?: unknown) => call<T>(
+      name,
+      store === '2gofresh' ? data : { ...(typeof data === 'object' && data !== null ? data : {}), store },
+    ),
+    [store],
+  )
+}
+
 function ShipModal({ order, onClose, onDone }: { order: Order; onClose: () => void; onDone: () => void }) {
+  const call = useShopeeCall()
   const [info, setInfo] = useState<ShipInfo | null>(null)
   const [method, setMethod] = useState('')
   const [addressId, setAddressId] = useState(0)
@@ -131,7 +148,7 @@ function ShipModal({ order, onClose, onDone }: { order: Order; onClose: () => vo
         setSlot(result.addresses[0]?.slots[0]?.id ?? '')
       })
       .catch((failure) => setError(message(failure)))
-  }, [order.orderSn])
+  }, [call, order.orderSn])
 
   const address = info?.addresses.find((entry) => entry.addressId === addressId)
 
@@ -202,6 +219,8 @@ function ShipModal({ order, onClose, onDone }: { order: Order; onClose: () => vo
 }
 
 function OrdersTab() {
+  const call = useShopeeCall()
+  const store = useContext(ShopeeStoreContext)
   const [tab, setTab] = useState('READY_TO_SHIP')
   const [orders, setOrders] = useState<Order[]>([])
   const [cursor, setCursor] = useState('')
@@ -218,7 +237,8 @@ function OrdersTab() {
   const orderRequestInFlight = useRef(false)
   const countRequestInFlight = useRef(false)
   const printer = usePrinter()
-  const { openOrderSn } = useOps()
+  const { openOrderSn: requestedOrderSn, openOrderStore } = useOps()
+  const openOrderSn = openOrderStore === store ? requestedOrderSn : ''
 
   useEffect(() => {
     if (!openOrderSn) return
@@ -229,11 +249,11 @@ function OrdersTab() {
   }, [openOrderSn])
 
   useEffect(() => {
-    const target = getOps().openOrderSn
+    const target = getOps().openOrderStore === store ? getOps().openOrderSn : ''
     if (!target || !orders.some((order) => order.orderSn === target)) return
     document.getElementById(`sp-order-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     setOps({ openOrderSn: '' })
-  }, [orders, openOrderSn])
+  }, [orders, openOrderSn, store])
 
   const load = useCallback(async (status: string, next = '') => {
     if (orderRequestInFlight.current) return
@@ -252,7 +272,7 @@ function OrdersTab() {
       orderRequestInFlight.current = false
       setLoading(false)
     }
-  }, [])
+  }, [call])
 
   useEffect(() => {
     const refresh = () => {
@@ -298,7 +318,7 @@ function OrdersTab() {
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [])
+  }, [call])
 
   async function printLabel(order: Order) {
     setPrinting(order.orderSn)
@@ -374,9 +394,9 @@ function OrdersTab() {
         </select>
         <button type="button" className="sp-btn ghost" onClick={() => void load(tab)}>↻ Muat ulang</button>
       </div>
-      <p className="sp-muted">
-        <b>Total pesanan {orderTabs.find((entry) => entry.id === tab)?.label}: {counts[tab] ?? shown.length}</b> · pesanan 14 hari terakhir
-        {printer.status === 'connected' ? ' · Cetak Label → printer Bluetooth' : ' · Printer belum terhubung: Cetak Label membuka PDF'}
+      <p className="sp-hint">
+        <b>{orderTabs.find((entry) => entry.id === tab)?.label}: {counts[tab] ?? shown.length} pesanan</b> · 14 hari terakhir
+        {printer.status === 'connected' ? ' · Cetak Label → printer Bluetooth' : ' · Printer belum terhubung, Cetak Label membuka PDF'}
       </p>
       {error && <p className="sp-error" role="alert">{error}</p>}
       {loading && orders.length === 0 && <p className="sp-muted">Memuat pesanan...</p>}
@@ -408,14 +428,14 @@ function OrdersTab() {
             <div className="sp-col">
               <b>{statusText[order.status] ?? order.status}</b>
               {order.status === 'READY_TO_SHIP' && order.shipBy > 0 && (
-                <span className={order.shipBy - now <= 12 * 60 * 1000 ? 'sp-warn sp-blink' : 'sp-warn'}>{countdown(order.shipBy - now)}</span>
+                <span className={order.shipBy - now <= SHIP_ALARM_WINDOW_MS ? 'sp-warn sp-blink' : 'sp-warn'}>{countdown(order.shipBy - now)}</span>
               )}
             </div>
             <div className="sp-col">
               <b>{order.carrier || '-'}</b>
             </div>
             <div className="sp-actions">
-              {order.status === 'READY_TO_SHIP' && <button type="button" onClick={() => setShipping(order)}>Atur Pengiriman</button>}
+              {order.status === 'READY_TO_SHIP' && <button type="button" className="primary" onClick={() => setShipping(order)}>Atur Pengiriman</button>}
               <button type="button" onClick={() => setOpenSn(openSn === order.orderSn ? '' : order.orderSn)}>{openSn === order.orderSn ? 'Tutup Rincian' : 'Lihat Rincian'}</button>
               {['READY_TO_SHIP', 'PROCESSED', 'SHIPPED'].includes(order.status) && (
                 <button type="button" disabled={printing === order.orderSn} onClick={() => void printLabel(order)}>
@@ -458,6 +478,7 @@ function OrdersTab() {
 }
 
 function PriceStockRow({ itemId, modelId, label, price, stock, onSaved }: { itemId: number; modelId: number; label: string; price: number; stock: number; onSaved: () => void }) {
+  const call = useShopeeCall()
   const [priceInput, setPriceInput] = useState(String(price))
   const [stockInput, setStockInput] = useState(String(stock))
   const [busy, setBusy] = useState('')
@@ -495,6 +516,7 @@ function PriceStockRow({ itemId, modelId, label, price, stock, onSaved }: { item
 }
 
 function ProductsTab() {
+  const call = useShopeeCall()
   const [items, setItems] = useState<Product[]>([])
   const [more, setMore] = useState(false)
   const [next, setNext] = useState(0)
@@ -515,7 +537,7 @@ function ProductsTab() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [call])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -533,7 +555,7 @@ function ProductsTab() {
         <input placeholder="Cari nama atau SKU produk (yang sudah dimuat)" value={search} onChange={(event) => setSearch(event.target.value)} />
         <button type="button" className="sp-btn ghost" onClick={() => void load(0)}>↻ Muat ulang</button>
       </div>
-      <p className="sp-muted">Ubah harga dan stok langsung ke Shopee. Hanya owner/supervisor yang bisa menyimpan perubahan.</p>
+      <p className="sp-hint">Ubah harga dan stok langsung ke Shopee. Hanya owner/supervisor yang bisa menyimpan perubahan.</p>
       {error && <p className="sp-error" role="alert">{error}</p>}
       {loading && items.length === 0 && <p className="sp-muted">Memuat produk...</p>}
       {shown.map((item) => (
@@ -562,24 +584,54 @@ function ProductsTab() {
 type Conversation = { id: string; buyerId: number; buyer: string; last: string; unread: number; fromBuyer: boolean; lastAt: number; latestId: string }
 type Msg = { id: string; mine: boolean; text: string; at: number; type: string }
 
-export function ShopeeChat() {
+export function ShopeeChat({ store = '2gofresh' }: { store?: ShopeeStoreId }) {
+  return (
+    <ShopeeStoreContext.Provider value={store}>
+      <div className="sp" data-store={store}>
+        <ShopeeChatInbox key={store} />
+      </div>
+    </ShopeeStoreContext.Provider>
+  )
+}
+
+function ShopeeChatInbox() {
+  const call = useShopeeCall()
+  const store = useContext(ShopeeStoreContext)
   const [chatTab, setChatTab] = useState<'today' | 'all'>('today')
-  const [openGroups, setOpenGroups] = useState({ unanswered: true, answered: false })
+  const [openGroups, setOpenGroups] = useState({ unread: true, pending: true, answered: false })
   const [chats, setChats] = useState<Conversation[]>([])
   const [active, setActive] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<Msg[]>([])
   const [text, setText] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [, setReadVersion] = useState(0)
+  const activeIdRef = useRef('')
+
+  // Menandai terbaca: lokal (langsung) dan ke Shopee (best effort) agar Seller Center ikut bersih.
+  const markRead = useCallback((chat: Conversation) => {
+    if (!chat.latestId) return
+    if (effectiveUnread(store, chat) > 0) {
+      const key = store === '2gofresh' ? 'shopeeUnreadChats' : 'freshstockUnreadChats'
+      setOps({ [key]: Math.max(0, getOps()[key] - 1) })
+    }
+    markChatReadLocally(store, chat)
+    setReadVersion((version) => version + 1)
+    if (chat.unread > 0) void call('shopeeMarkChatRead', { conversationId: chat.id, lastMessageId: chat.latestId }).catch(() => undefined)
+  }, [call, store])
 
   const loadChats = useCallback(async () => {
     try {
-      setChats((await call<{ conversations: Conversation[] }>('shopeeChats')).conversations)
+      const list = (await call<{ conversations: Conversation[] }>('shopeeChats')).conversations
+      setChats(list)
       setError('')
+      // Pesan baru masuk saat chat sedang dibuka tidak boleh menjadi "belum dibaca".
+      const current = list.find((chat) => chat.id === activeIdRef.current)
+      if (current && current.unread > 0) markRead(current)
     } catch (failure) {
       setError(message(failure))
     }
-  }, [])
+  }, [call, markRead])
 
   const loadMessages = useCallback(async (id: string) => {
     try {
@@ -587,7 +639,7 @@ export function ShopeeChat() {
     } catch (failure) {
       setError(message(failure))
     }
-  }, [])
+  }, [call])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -597,12 +649,18 @@ export function ShopeeChat() {
   }, [loadChats])
 
   useEffect(() => {
+    activeIdRef.current = active?.id ?? ''
     if (!active) return
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadMessages(active.id)
     const timer = window.setInterval(() => void loadMessages(active.id), 15000)
     return () => window.clearInterval(timer)
   }, [active, loadMessages])
+
+  function openChat(chat: Conversation) {
+    setActive(chat)
+    markRead(chat)
+  }
 
   async function send(event: React.FormEvent) {
     event.preventDefault()
@@ -620,10 +678,12 @@ export function ShopeeChat() {
   }
 
   const dayStart = new Date().setHours(0, 0, 0, 0)
-  const visibleChats = chatTab === 'today' ? chats.filter((chat) => chat.lastAt >= dayStart || ((chat.fromBuyer || chat.unread > 0) && chat.lastAt >= dayStart - 6 * 86400000)) : chats
-  const unanswered = visibleChats.filter((chat) => chat.fromBuyer || chat.unread > 0)
-  const answered = visibleChats.filter((chat) => !chat.fromBuyer && chat.unread === 0)
-  const totalUnread = chats.filter((chat) => (chat.fromBuyer || chat.unread > 0) && chat.lastAt >= dayStart - 6 * 86400000).length
+  const unreadOf = (chat: Conversation) => effectiveUnread(store, chat)
+  const visibleChats = chatTab === 'today' ? chats.filter((chat) => chat.lastAt >= dayStart || ((chat.fromBuyer || unreadOf(chat) > 0) && chat.lastAt >= dayStart - 6 * 86400000)) : chats
+  const unreadChats = visibleChats.filter((chat) => unreadOf(chat) > 0)
+  const pendingChats = visibleChats.filter((chat) => unreadOf(chat) === 0 && chat.fromBuyer)
+  const answeredChats = visibleChats.filter((chat) => unreadOf(chat) === 0 && !chat.fromBuyer)
+  const totalUnread = chats.filter((chat) => unreadOf(chat) > 0).length
 
   return (
     <div className={`sp-chat${active ? ' open' : ''}`}>
@@ -636,13 +696,13 @@ export function ShopeeChat() {
           </button>
         </div>
         {chats.length === 0 && !error && <div className="sp-empty">Belum ada percakapan</div>}
-        {([['unanswered', 'Belum Dibalas', unanswered], ['answered', 'Sudah Dibalas', answered]] as const).map(([key, label, rows]) => (
+        {([['unread', 'Belum Dibaca', unreadChats], ['pending', 'Belum Dibalas', pendingChats], ['answered', 'Sudah Dibalas', answeredChats]] as const).map(([key, label, rows]) => (
           <div key={key} className="sp-chat-group">
             <button type="button" className="sp-chat-group-head" onClick={() => setOpenGroups((current) => ({ ...current, [key]: !current[key] }))}>
               <span>{openGroups[key] ? '▾' : '▸'} {label} ({rows.length})</span>
             </button>
             {openGroups[key] && rows.map((chat) => (
-              <button key={chat.id} type="button" className={`sp-chat-row${active?.id === chat.id ? ' on' : ''}`} onClick={() => setActive(chat)}>
+              <button key={chat.id} type="button" className={`sp-chat-row${active?.id === chat.id ? ' on' : ''}`} onClick={() => openChat(chat)}>
                 <span className="sp-avatar">{(chat.buyer || '?').charAt(0).toUpperCase()}</span>
                 <span className="sp-chat-main">
                   <b>{chat.buyer || `Pembeli ${chat.buyerId}`}</b>
@@ -650,7 +710,7 @@ export function ShopeeChat() {
                 </span>
                 <span className="sp-chat-side">
                   <small>{chatTime(chat.lastAt)}</small>
-                  {(chat.unread > 0 || chat.fromBuyer) && <i>{chat.unread || 1}</i>}
+                  {unreadOf(chat) > 0 && <i>{unreadOf(chat)}</i>}
                 </span>
               </button>
             ))}
@@ -684,6 +744,7 @@ export function ShopeeChat() {
 type ReturnRow = { returnSn: string; orderSn: string; status: string; reason: string; amount: number; createdAt: number }
 
 function ReturnsTab() {
+  const call = useShopeeCall()
   const [rows, setRows] = useState<ReturnRow[] | null>(null)
   const [error, setError] = useState('')
 
@@ -694,7 +755,7 @@ function ReturnsTab() {
         setError(message(failure))
         setRows([])
       })
-  }, [])
+  }, [call])
 
   return (
     <>
@@ -921,52 +982,242 @@ function VariantBatchTab() {
   )
 }
 
-function MarketplaceShopee() {
-  const [status, setStatus] = useState<{ connected: boolean; shopName?: string } | null>(null)
-  const [main, setMain] = useState<'orders' | 'products' | 'returns' | 'variants'>('orders')
+type CatalogGap = { sku: string; name: string; category: string; unit: string; minQty: number | null; price: number | null }
+type UnmatchedListing = { itemId: number; sku: string; name: string; status: string }
+type CatalogSync = {
+  synced: boolean
+  syncedAt?: number
+  totals?: { master: number; uploaded: number; missing: number; extra: number; listings: number }
+  missing?: CatalogGap[]
+  extra?: UnmatchedListing[]
+}
+
+const GAP_PAGE = 100
+
+function MissingProductsTab({ onCount }: { onCount: (count: number) => void }) {
+  const call = useShopeeCall()
+  const [data, setData] = useState<CatalogSync | null>(null)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [search, setSearch] = useState('')
+  const [category, setCategory] = useState('')
+  const [visible, setVisible] = useState(GAP_PAGE)
+  const [copied, setCopied] = useState(false)
+
+  const load = useCallback(async (refresh: boolean) => {
+    setBusy(true)
+    setError('')
+    try {
+      const result = await call<CatalogSync>('shopeeMissingProducts', refresh ? { refresh: true } : undefined)
+      setData(result)
+      if (result.synced) onCount(result.totals?.missing ?? 0)
+    } catch (failure) {
+      setError(message(failure))
+      setData((current) => current ?? { synced: false })
+    } finally {
+      setBusy(false)
+    }
+  }, [call, onCount])
 
   useEffect(() => {
-    call<{ connected: boolean; shopName?: string }>('shopeeStatus')
-      .then(setStatus)
-      .catch(() => setStatus({ connected: false }))
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load(false)
+  }, [load])
+
+  const missing = data?.missing ?? []
+  const categories = [...new Set(missing.map((entry) => entry.category).filter(Boolean))].sort()
+  const needle = search.trim().toLowerCase()
+  const shown = missing.filter((entry) =>
+    (!category || entry.category === category) &&
+    (!needle || entry.sku.toLowerCase().includes(needle) || entry.name.toLowerCase().includes(needle)))
+
+  async function copySkus() {
+    try {
+      await navigator.clipboard.writeText(shown.map((entry) => `${entry.sku}\t${entry.name}`).join('\n'))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2500)
+    } catch {
+      setError('Browser menolak menyalin. Izinkan akses clipboard lalu coba lagi.')
+    }
+  }
+
+  const totals = data?.totals
+  return (
+    <section className="sp-gap">
+      <div className="sp-card sp-gap-head">
+        <div>
+          <h2>Produk belum diupload ke Shopee</h2>
+          <p className="sp-muted">Membandingkan master Google Sheets dengan semua listing toko ini lewat SKU induk atau kode variasi (SKU varian seperti <code>FISH-1234-500G</code> dihitung ke SKU induknya).</p>
+          {data?.synced && <p className="sp-muted">Sync terakhir: {dateText(data.syncedAt ?? 0)}</p>}
+        </div>
+        <button type="button" className="sp-btn" disabled={busy} onClick={() => void load(true)}>
+          {busy ? 'Menyinkronkan…' : '⟳ Sync dengan Google Sheets'}
+        </button>
+      </div>
+      {error && <p className="sp-error" role="alert">{error}</p>}
+      {busy && !data?.synced && <p className="sp-muted">Memeriksa…</p>}
+      {data && !data.synced && !busy && !error && (
+        <div className="sp-empty">Belum pernah disinkronkan. Klik <b>Sync dengan Google Sheets</b> untuk melihat produk yang belum diupload.</div>
+      )}
+      {totals && (
+        <>
+          <div className="sp-stats">
+            <div><b>{totals.master}</b><span>Produk di master</span></div>
+            <div className="ok"><b>{totals.uploaded}</b><span>Sudah ada di Shopee</span></div>
+            <div className="warn"><b>{totals.missing}</b><span>Belum diupload</span></div>
+            <div><b>{totals.extra}</b><span>Listing tanpa SKU master</span></div>
+          </div>
+          <div className="sp-toolbar">
+            <input placeholder="Cari SKU atau nama produk" value={search} onChange={(event) => { setSearch(event.target.value); setVisible(GAP_PAGE) }} />
+            <select value={category} onChange={(event) => { setCategory(event.target.value); setVisible(GAP_PAGE) }} aria-label="Filter kategori">
+              <option value="">Semua kategori</option>
+              {categories.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
+            </select>
+            <button type="button" className="sp-btn ghost" disabled={shown.length === 0} onClick={() => void copySkus()}>{copied ? '✔ Tersalin' : 'Salin daftar'}</button>
+          </div>
+          {shown.length === 0 && <div className="sp-empty">{missing.length === 0 ? 'Semua produk master sudah ada di Shopee 🎉' : 'Tidak ada produk yang cocok dengan pencarian.'}</div>}
+          {shown.length > 0 && (
+            <div className="sp-card sp-gap-list">
+              <div className="sp-gap-row head"><span>SKU</span><span>Nama produk</span><span>Kategori</span><span>Min. beli</span><span>Harga marketplace</span></div>
+              {shown.slice(0, visible).map((entry) => (
+                <div key={entry.sku} className="sp-gap-row">
+                  <code>{entry.sku}</code>
+                  <span className="sp-gap-name">{entry.name || '-'}</span>
+                  <span>{entry.category || '-'}</span>
+                  <span>{entry.minQty !== null ? `${entry.minQty} ${entry.unit.toLowerCase()}` : '-'}</span>
+                  <span>{entry.price !== null ? money.format(entry.price) : '-'}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {shown.length > visible && <button type="button" className="sp-btn ghost wide" onClick={() => setVisible((current) => current + GAP_PAGE)}>Tampilkan {Math.min(GAP_PAGE, shown.length - visible)} lagi (sisa {shown.length - visible})</button>}
+          {(data?.extra?.length ?? 0) > 0 && (
+            <details className="sp-card sp-gap-extra">
+              <summary>{totals.extra} listing Shopee belum cocok dengan SKU master</summary>
+              <p className="sp-muted">Biasanya SKU induk/kode variasinya kosong atau berbeda dari master. Rapikan SKU-nya di Shopee lalu sync ulang.</p>
+              {data?.extra?.map((entry) => (
+                <div key={entry.itemId} className="sp-gap-row extra">
+                  <code>{entry.sku || '(kosong)'}</code>
+                  <span className="sp-gap-name">{entry.name}</span>
+                  <span>ID {entry.itemId}</span>
+                  <span>{entry.status}</span>
+                </div>
+              ))}
+            </details>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+type StoreStatus = { connected: boolean; shopName?: string }
+const storeNames: Record<ShopeeStoreId, string> = { '2gofresh': '2goFresh', freshstock: 'Freshstock' }
+
+function MarketplaceShopee() {
+  const [statuses, setStatuses] = useState<Record<ShopeeStoreId, StoreStatus | null>>({ '2gofresh': null, freshstock: null })
+  const [main, setMain] = useState<'orders' | 'products' | 'missing' | 'returns' | 'variants'>('orders')
+  const [store, setStore] = useState<ShopeeStoreId>(() =>
+    new URLSearchParams(window.location.search).get('store') === 'freshstock' ? 'freshstock' : '2gofresh')
+  const [gapCounts, setGapCounts] = useState<Record<ShopeeStoreId, number | null>>({ '2gofresh': null, freshstock: null })
+  const [error, setError] = useState('')
+  const { openOrderSn, openOrderStore, shopeeToShip, freshstockToShip } = useOps()
+  const status = statuses[store]
+  const toShip = store === '2gofresh' ? shopeeToShip : freshstockToShip
+  const handleGapCount = useCallback(
+    (count: number) => setGapCounts((current) => ({ ...current, [store]: count })),
+    [store],
+  )
+
+  useEffect(() => {
+    for (const id of ['2gofresh', 'freshstock'] as const) {
+      call<StoreStatus>('shopeeStatus', id === '2gofresh' ? undefined : { store: id })
+        .then((result) => setStatuses((current) => ({ ...current, [id]: result })))
+        .catch(() => setStatuses((current) => ({ ...current, [id]: { connected: false } })))
+      call<{ synced: boolean; totals?: { missing: number } }>('shopeeMissingProducts', id === '2gofresh' ? undefined : { store: id })
+        .then((result) => setGapCounts((current) => ({ ...current, [id]: result.synced ? result.totals?.missing ?? 0 : null })))
+        .catch(() => undefined)
+    }
   }, [])
+
+  // Notifikasi pesanan dari toko lain membuka toko yang benar sebelum detail pesanan dicari.
+  useEffect(() => {
+    if (!openOrderSn) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setStore(openOrderStore)
+    setMain('orders')
+  }, [openOrderSn, openOrderStore])
 
   async function connect() {
     setError('')
     try {
-      window.location.assign((await call<{ url: string }>('shopeeConnectUrl')).url)
+      window.location.assign((await call<{ url: string }>('shopeeConnectUrl', store === '2gofresh' ? undefined : { store })).url)
     } catch (failure) {
       setError(message(failure))
     }
   }
 
+  const menu: { id: typeof main; label: string; icon: string; badge?: number }[] = [
+    { id: 'orders', label: 'Pesanan', icon: '📦', badge: toShip },
+    { id: 'products', label: 'Produk & Harga', icon: '🏷️' },
+    { id: 'missing', label: 'Belum Diupload', icon: '⬆️', badge: gapCounts[store] ?? undefined },
+    { id: 'returns', label: 'Pengembalian', icon: '↩️' },
+    ...(store === '2gofresh' ? [{ id: 'variants' as const, label: 'Varian dari Master', icon: '🧩' }] : []),
+  ]
+  const activeMain = menu.some((entry) => entry.id === main) ? main : 'orders'
+
   return (
-    <div className="sp">
-      <div className="sp-head">
-        <div>
-          <strong>Shopee Seller</strong>
-          <span>{status?.connected ? status.shopName || 'Terhubung' : 'Belum terhubung'}</span>
-        </div>
-        {status?.connected && <nav aria-label="Menu Shopee">
-          {([['orders', 'Pesanan'], ['products', 'Produk'], ['returns', 'Pengembalian'], ['variants', 'Varian dari Master']] as const).map(([id, label]) => (
-            <button key={id} type="button" className={main === id ? 'on' : ''} onClick={() => setMain(id)}>{label}</button>
+    <div className="sp" data-store={store}>
+      <header className="sp-top">
+        <nav className="sp-store-switch" aria-label="Pilih toko Shopee">
+          {(['2gofresh', 'freshstock'] as const).map((id) => (
+            <button
+              key={id}
+              type="button"
+              className={store === id ? 'on' : ''}
+              aria-pressed={store === id}
+              data-store={id}
+              onClick={() => {
+                setError('')
+                setStore(id)
+              }}
+            >
+              <i className={`sp-state${statuses[id]?.connected ? ' ok' : ''}`} aria-hidden="true" />
+              <span className="sp-store-text">
+                <b>{storeNames[id]}</b>
+                <small>{statuses[id]?.connected ? statuses[id]?.shopName || 'Terhubung' : statuses[id] === null ? 'Memeriksa...' : 'Belum terhubung'}</small>
+              </span>
+            </button>
           ))}
-        </nav>}
-      </div>
-      {status === null && <p className="sp-muted">Memeriksa koneksi...</p>}
-      {status && !status.connected && (
-        <section className="sp-connect">
-          <h2>Hubungkan toko Shopee</h2>
-          <p>Login ke akun penjual Shopee lalu setujui akses. Kunci API tersimpan aman di server. Hanya owner/supervisor yang bisa menghubungkan.</p>
-          <button type="button" className="sp-btn" onClick={() => void connect()}>Hubungkan Shopee</button>
-          {error && <p className="sp-error" role="alert">{error}</p>}
-        </section>
-      )}
-      {status?.connected && main === 'orders' && <OrdersTab />}
-      {status?.connected && main === 'products' && <ProductsTab />}
-      {status?.connected && main === 'returns' && <ReturnsTab />}
-      {status?.connected && main === 'variants' && <VariantBatchTab />}
+        </nav>
+        {status?.connected && (
+          <nav className="sp-main-tabs" aria-label="Menu Shopee">
+            {menu.map((entry) => (
+              <button key={entry.id} type="button" className={activeMain === entry.id ? 'on' : ''} onClick={() => setMain(entry.id)}>
+                <span aria-hidden="true">{entry.icon}</span> {entry.label}
+                {entry.badge !== undefined && entry.badge > 0 && <span className="sp-count">{entry.badge}</span>}
+              </button>
+            ))}
+          </nav>
+        )}
+      </header>
+
+      <ShopeeStoreContext.Provider value={store}>
+        {status === null && <p className="sp-muted">Memeriksa koneksi...</p>}
+        {status && !status.connected && (
+          <section className="sp-connect">
+            <h2>Hubungkan toko {storeNames[store]}</h2>
+            <p>Login ke akun penjual Shopee {storeNames[store]} lalu setujui akses. Kunci API tersimpan aman di server dan token toko ini dipisah dari toko lain. Hanya owner/supervisor yang bisa menghubungkan.</p>
+            <button type="button" className="sp-btn" onClick={() => void connect()}>Hubungkan {storeNames[store]}</button>
+            {error && <p className="sp-error" role="alert">{error}</p>}
+          </section>
+        )}
+        {status?.connected && activeMain === 'orders' && <OrdersTab key={store} />}
+        {status?.connected && activeMain === 'products' && <ProductsTab key={store} />}
+        {status?.connected && activeMain === 'missing' && <MissingProductsTab key={store} onCount={handleGapCount} />}
+        {status?.connected && activeMain === 'returns' && <ReturnsTab key={store} />}
+        {status?.connected && activeMain === 'variants' && store === '2gofresh' && <VariantBatchTab />}
+      </ShopeeStoreContext.Provider>
     </div>
   )
 }

@@ -46,6 +46,8 @@ type FundCategory = 'change' | ExpenseCategory
 type Expense = { id: string; category: ExpenseCategory; amount: number; note: string; createdAt: Date | null }
 
 const currency = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 })
+const closingReportWhatsApp = '6281231678067'
+const closingReportWhatsAppLabel = '0812-3167-8067'
 const number = new Intl.NumberFormat('id-ID')
 
 const categoryLabel: Record<ExpenseCategory, string> = {
@@ -280,7 +282,28 @@ export function ClosedScreen({
 }) {
   const label = summary.difference === 0 ? 'Uang pas' : summary.difference > 0 ? 'Lebih' : 'Kurang'
   const [waSent, setWaSent] = useState(false)
-  const waUrl = `https://wa.me/6281231678067?text=${encodeURIComponent(summary.reportText ?? 'Laporan closing shift')}`
+  const [copied, setCopied] = useState(false)
+  const fullReport = summary.reportText ?? [
+    '*LAPORAN CLOSING SHIFT - 2goFresh*',
+    `Uang seharusnya: ${currency.format(summary.expectedCash)}`,
+    `Uang di laci: ${currency.format(summary.countedCash)}`,
+    `Selisih: ${summary.difference === 0 ? 'PAS' : `${label} ${currency.format(Math.abs(summary.difference))}`}`,
+  ].join('\n')
+  // Pesan sangat panjang bisa gagal terbuka lewat tautan wa.me, jadi kirim ringkasan dan sediakan tombol salin.
+  const reportTooLong = encodeURIComponent(fullReport).length > 3000
+  const waText = reportTooLong
+    ? `${fullReport.split('\n').slice(0, 6).join('\n')}\n...\nUang seharusnya: ${currency.format(summary.expectedCash)}\nUang di laci: ${currency.format(summary.countedCash)}\nSelisih: ${label} ${currency.format(Math.abs(summary.difference))}\n(Laporan lengkap sudah dikirim ke email supervisor.)`
+    : fullReport
+  const waUrl = `https://wa.me/${closingReportWhatsApp}?text=${encodeURIComponent(waText)}`
+
+  async function copyReport() {
+    try {
+      await navigator.clipboard.writeText(fullReport)
+      setCopied(true)
+    } catch {
+      window.prompt('Salin laporan ini lalu tempel di WhatsApp:', fullReport)
+    }
+  }
   return (
     <main className="pos-access-page">
       <section className="pos-access-card sf-gate">
@@ -301,6 +324,8 @@ export function ClosedScreen({
         <a className="sf-primary sf-wa" href={waUrl} target="_blank" rel="noreferrer" onClick={() => setWaSent(true)}>
           Kirim Laporan ke WhatsApp (wajib)
         </a>
+        <button type="button" className="sf-link" onClick={() => void copyReport()}>{copied ? '✔ Laporan tersalin' : 'Salin laporan lengkap'}</button>
+        <p className="sf-note">Tujuan WhatsApp: {closingReportWhatsAppLabel}</p>
         <button type="button" className="sf-primary" disabled={!waSent} onClick={() => void signOut(auth)}>Keluar</button>
         {!waSent && <p className="sf-note">Tekan tombol WhatsApp dan kirim pesannya dulu, baru bisa keluar.</p>}
         {canReturn && <button type="button" className="sf-link" onClick={onReturn}>Kembali ke POS</button>}
@@ -645,6 +670,17 @@ export function ClosingPanel({
         })
         onClosed(result.data)
       } catch (closeError) {
+        // Respons bisa terputus padahal shift sudah tertutup; ambil laporan yang tersimpan agar tombol WhatsApp tetap muncul.
+        const code = (closeError as { code?: string }).code ?? ''
+        if (['functions/internal', 'functions/unavailable', 'functions/deadline-exceeded'].includes(code)) {
+          try {
+            const recovered = await httpsCallable<unknown, CloseSummary>(functions, 'closedShiftReport')({ shiftId: shift.id })
+            onClosed(recovered.data)
+            return
+          } catch {
+            // Shift memang belum tertutup; tampilkan galat asli di bawah.
+          }
+        }
         setError(errorText(closeError, 'Closing gagal.'))
         setBusy(false)
       }

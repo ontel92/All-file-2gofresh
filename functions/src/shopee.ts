@@ -1,10 +1,11 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHmac } from 'node:crypto'
 import { getStorage } from 'firebase-admin/storage'
 import { FieldValue, getFirestore } from 'firebase-admin/firestore'
 import { logger } from 'firebase-functions'
 import { defineSecret } from 'firebase-functions/params'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
-import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https'
+import { HttpsError, onCall, onRequest, type CallableRequest } from 'firebase-functions/v2/https'
 import { google } from 'googleapis'
 import { shopeeMarginMappings } from './shopeeMarginMappings'
 
@@ -25,15 +26,43 @@ const options = {
 }
 const shopeeHost = { value: () => process.env.SHOPEE_HOST ?? 'https://partner.shopeemobile.com' }
 
-const callbackUrl = 'https://kasir.2gofresh.com/shopee/callback'
-const authDoc = () => getFirestore().collection('shopeeAuth').doc('current')
+// Freshstock memakai aplikasi Open Platform, token, dan callback sendiri agar tidak tercampur dengan 2goFresh.
+type ShopeeStore = '2gofresh' | 'freshstock'
+const freshstockPartnerIdSecret = defineSecret('SHOPEE_FRESHSTOCK_PARTNER_ID')
+const freshstockPartnerKeySecret = defineSecret('SHOPEE_FRESHSTOCK_PARTNER_KEY')
+const storeOptions = {
+  ...options,
+  secrets: [partnerIdSecret, partnerKeySecret, freshstockPartnerIdSecret, freshstockPartnerKeySecret],
+}
+const storeLongOptions = { ...storeOptions, timeoutSeconds: 300 }
+const storeContext = new AsyncLocalStorage<ShopeeStore>()
+const currentStore = (): ShopeeStore => storeContext.getStore() ?? '2gofresh'
+const activePartnerId = () => (currentStore() === 'freshstock' ? freshstockPartnerIdSecret : partnerIdSecret).value().trim()
+const activePartnerKey = () => (currentStore() === 'freshstock' ? freshstockPartnerKeySecret : partnerKeySecret).value().trim()
+const callbackUrls: Record<ShopeeStore, string> = {
+  '2gofresh': 'https://kasir.2gofresh.com/shopee/callback',
+  freshstock: 'https://kasir.2gofresh.com/shopee/callback-freshstock',
+}
+const authDoc = () => getFirestore().collection('shopeeAuth').doc(currentStore() === 'freshstock' ? 'freshstock' : 'current')
 
 type ShopeeAuth = { shopId: number; accessToken: string; refreshToken: string; expiresAt: number }
 type Json = Record<string, unknown>
 type Role = 'owner' | 'supervisor' | 'cashier'
 
 function sign(base: string) {
-  return createHmac('sha256', partnerKeySecret.value().trim()).update(base).digest('hex')
+  return createHmac('sha256', activePartnerKey()).update(base).digest('hex')
+}
+
+function storeFromRequest(request: { data: unknown }): ShopeeStore {
+  const store = typeof request.data === 'object' && request.data !== null ? (request.data as Json).store : undefined
+  if (store === undefined || store === '2gofresh') return '2gofresh'
+  if (store === 'freshstock') return 'freshstock'
+  throw new HttpsError('invalid-argument', 'Toko Shopee tidak valid.')
+}
+
+// Tanpa field `store`, pemanggil lama tetap memakai toko 2goFresh.
+function storeCall<T>(callOptions: typeof storeOptions | typeof storeLongOptions, handler: (request: CallableRequest) => Promise<T>) {
+  return onCall(callOptions, (request) => storeContext.run(storeFromRequest(request), () => handler(request)))
 }
 
 async function requireStaff(request: { auth?: { uid: string } }, roles: Role[] = ['owner', 'supervisor', 'cashier']) {
@@ -67,7 +96,7 @@ function whole(value: unknown, label: string) {
 }
 
 async function publicCall(path: string, body: Json) {
-  const partnerId = partnerIdSecret.value().trim()
+  const partnerId = activePartnerId()
   const timestamp = Math.floor(Date.now() / 1000)
   const response = await fetch(
     `${shopeeHost.value()}${path}?partner_id=${partnerId}&timestamp=${timestamp}&sign=${sign(`${partnerId}${path}${timestamp}`)}`,
@@ -103,7 +132,7 @@ async function getAuth(): Promise<ShopeeAuth> {
 
 async function shopFetch(path: string, params: Record<string, string | number> = {}, body?: Json) {
   const auth = await getAuth()
-  const partnerId = partnerIdSecret.value().trim()
+  const partnerId = activePartnerId()
   const timestamp = Math.floor(Date.now() / 1000)
   const query = new URLSearchParams({
     partner_id: partnerId,
@@ -135,7 +164,7 @@ async function shopCall(path: string, params: Record<string, string | number> = 
 
 async function shopImageUpload(fileName: string, contentType: string, bytes: Buffer) {
   const auth = await getAuth()
-  const partnerId = partnerIdSecret.value().trim()
+  const partnerId = activePartnerId()
   const path = '/api/v2/media_space/upload_image'
   const timestamp = Math.floor(Date.now() / 1000)
   const query = new URLSearchParams({
@@ -160,17 +189,21 @@ function productResponse(payload: Json): Json {
   return obj(payload.response)
 }
 
-export const shopeeConnectUrl = onCall(options, async (request) => {
+export const shopeeConnectUrl = storeCall(storeOptions, async (request) => {
   await requireStaff(request, managers)
-  const partnerId = partnerIdSecret.value().trim()
+  const partnerId = activePartnerId()
   const path = '/api/v2/shop/auth_partner'
   const timestamp = Math.floor(Date.now() / 1000)
   return {
-    url: `${shopeeHost.value()}${path}?partner_id=${partnerId}&timestamp=${timestamp}&sign=${sign(`${partnerId}${path}${timestamp}`)}&redirect=${encodeURIComponent(callbackUrl)}`,
+    url: `${shopeeHost.value()}${path}?partner_id=${partnerId}&timestamp=${timestamp}&sign=${sign(`${partnerId}${path}${timestamp}`)}&redirect=${encodeURIComponent(callbackUrls[currentStore()])}`,
   }
 })
 
-export const shopeeCallback = onRequest(options, async (request, response) => {
+async function completeShopeeAuthorization(
+  store: ShopeeStore,
+  request: { query: Record<string, unknown> },
+  response: { status: (code: number) => { send: (body: string) => void }; redirect: (url: string) => void },
+) {
   const code = String(request.query.code ?? '')
   const shopId = Number(request.query.shop_id ?? 0)
   if (!code || !shopId) {
@@ -178,15 +211,27 @@ export const shopeeCallback = onRequest(options, async (request, response) => {
     return
   }
   try {
-    await saveTokens(shopId, await publicCall('/api/v2/auth/token/get', { code, shop_id: shopId }))
-    response.redirect('https://kasir.2gofresh.com/?shopee=connected')
+    await storeContext.run(store, async () => {
+      await saveTokens(shopId, await publicCall('/api/v2/auth/token/get', { code, shop_id: shopId }))
+    })
+    response.redirect(
+      store === 'freshstock'
+        ? 'https://kasir.2gofresh.com/?panel=marketplace&shopee=connected&store=freshstock'
+        : 'https://kasir.2gofresh.com/?shopee=connected',
+    )
   } catch (error) {
-    logger.error('Shopee callback gagal', error)
+    logger.error('Shopee callback gagal', { store, error })
     response.status(500).send('Gagal menghubungkan Shopee. Coba lagi dari POS.')
   }
-})
+}
 
-export const shopeeStatus = onCall(options, async (request) => {
+export const shopeeCallback = onRequest(options, (request, response) =>
+  completeShopeeAuthorization('2gofresh', request, response))
+
+export const shopeeCallbackFreshstock = onRequest(storeOptions, (request, response) =>
+  completeShopeeAuthorization('freshstock', request, response))
+
+export const shopeeStatus = storeCall(storeOptions, async (request) => {
   await requireStaff(request)
   const data = (await authDoc().get()).data() as ShopeeAuth | undefined
   if (!data) return { connected: false }
@@ -200,7 +245,7 @@ export const shopeeStatus = onCall(options, async (request) => {
 
 const orderStatuses = ['ALL', 'UNPAID', 'READY_TO_SHIP', 'PROCESSED', 'SHIPPED', 'COMPLETED', 'IN_CANCEL', 'CANCELLED', 'TO_RETURN']
 
-export const shopeeOrders = onCall(options, async (request) => {
+export const shopeeOrders = storeCall(storeOptions, async (request) => {
   await requireStaff(request)
   const data = input(request)
   const status = typeof data.status === 'string' ? data.status : 'READY_TO_SHIP'
@@ -682,7 +727,7 @@ export const shopeeRealizedMargins = onCall(
   },
 )
 
-export const shopeeTracking = onCall(options, async (request) => {
+export const shopeeTracking = storeCall(storeOptions, async (request) => {
   await requireStaff(request)
   const data = input(request)
   const orderSn = str(data.orderSn, 'Nomor pesanan')
@@ -695,7 +740,7 @@ export const shopeeTracking = onCall(options, async (request) => {
 })
 
 // Counts orders per status over the same 14-day window as the order list.
-export const shopeeOrderCounts = onCall(options, async (request) => {
+export const shopeeOrderCounts = storeCall(storeOptions, async (request) => {
   await requireStaff(request)
   const now = Math.floor(Date.now() / 1000)
   const statuses = orderStatuses.filter((status) => status !== 'ALL' && status !== 'TO_RETURN')
@@ -724,7 +769,7 @@ export const shopeeOrderCounts = onCall(options, async (request) => {
   return { counts: { ...counts, ALL: Object.values(counts).reduce((sum, value) => sum + value, 0) } }
 })
 
-export const shopeeShipInfo = onCall(options, async (request) => {
+export const shopeeShipInfo = storeCall(storeOptions, async (request) => {
   await requireStaff(request)
   const orderSn = str(input(request).orderSn, 'Nomor pesanan')
   const response = obj((await shopCall('/api/v2/logistics/get_shipping_parameter', { order_sn: orderSn })).response)
@@ -744,7 +789,7 @@ export const shopeeShipInfo = onCall(options, async (request) => {
   }
 })
 
-export const shopeeShip = onCall(options, async (request) => {
+export const shopeeShip = storeCall(storeOptions, async (request) => {
   await requireStaff(request)
   const data = input(request)
   const orderSn = str(data.orderSn, 'Nomor pesanan')
@@ -763,7 +808,7 @@ export const shopeeShip = onCall(options, async (request) => {
   return { ok: true }
 })
 
-export const shopeeLabel = onCall(options, async (request) => {
+export const shopeeLabel = storeCall(storeOptions, async (request) => {
   await requireStaff(request)
   const data = input(request)
   const orderSn = str(data.orderSn, 'Nomor pesanan')
@@ -804,7 +849,7 @@ export const shopeeLabel = onCall(options, async (request) => {
   return { pdfBase64: Buffer.from(await download.arrayBuffer()).toString('base64'), trackingNumber }
 })
 
-export const shopeeProducts = onCall(options, async (request) => {
+export const shopeeProducts = storeCall(storeOptions, async (request) => {
   await requireStaff(request)
   const offset = whole(input(request).offset ?? 0, 'Offset')
   const listing = obj((await shopCall('/api/v2/product/get_item_list', { offset, page_size: 20, item_status: 'NORMAL' })).response)
@@ -1047,6 +1092,122 @@ export const shopeeVariantCandidates = onCall(options, async (request) => {
       : []
   })
   return { products, nextOffset: offset + page.length, hasMore: offset + page.length < candidates.length }
+})
+
+type CatalogGap = { sku: string; name: string; category: string; unit: string; minQty: number | null; price: number | null }
+type UnmatchedListing = { itemId: number; sku: string; name: string; status: string }
+
+const normalizeSku = (value: unknown) => String(value ?? '').trim().toUpperCase()
+const skuBase = (sku: string) => sku.replace(/-\d+G$/, '')
+
+async function listShopeeItems() {
+  const items: { itemId: number; status: string }[] = []
+  // Produk yang sedang diturunkan/ditinjau tetap dihitung sudah ada agar tidak dianggap belum diupload.
+  for (const status of ['NORMAL', 'UNLIST', 'BANNED', 'REVIEWING']) {
+    let offset = 0
+    for (let page = 0; page < 30; page += 1) {
+      const result = obj((await shopCall('/api/v2/product/get_item_list', { offset, page_size: 100, item_status: status })).response)
+      list(result.item).forEach((item) => items.push({ itemId: Number(item.item_id), status }))
+      if (result.has_next_page !== true) break
+      offset = Number(result.next_offset ?? offset + 100)
+    }
+  }
+  return items
+}
+
+async function compareMasterWithShopee() {
+  const masterRows = await shopeeVariantMasterRows()
+  const master = new Map<string, CatalogGap>()
+  for (const [index, row] of masterRows.entries()) {
+    if (index === 0) continue
+    const sku = normalizeSku(row[1])
+    if (!sku || master.has(sku)) continue
+    const price = marketplaceVariantTiers
+      .map((tier) => masterNumber(row[15 + tier.priceIndex]))
+      .find((value) => value !== null && value >= 100) ?? null
+    master.set(sku, {
+      sku,
+      name: String(row[3] ?? '').trim(),
+      category: String(row[2] ?? '').trim(),
+      unit: String(row[4] ?? '').trim().toUpperCase(),
+      minQty: masterNumber(row[0]),
+      price,
+    })
+  }
+
+  const listed = await listShopeeItems()
+  const matched = new Set<string>()
+  const unmatched: UnmatchedListing[] = []
+  const markMatched = (sku: string) => {
+    if (!sku) return false
+    const hit = master.has(sku) ? sku : master.has(skuBase(sku)) ? skuBase(sku) : ''
+    if (hit) matched.add(hit)
+    return Boolean(hit)
+  }
+  const mappedByItem = new Map<number, Set<string>>()
+  if (currentStore() === '2gofresh') {
+    for (const mapping of shopeeMarginMappings) {
+      if (!mapping.ready) continue
+      const skus = mappedByItem.get(mapping.itemId) ?? new Set<string>()
+      skus.add(normalizeSku(mapping.sku))
+      mappedByItem.set(mapping.itemId, skus)
+    }
+  }
+
+  const statusById = new Map(listed.map((entry) => [entry.itemId, entry.status]))
+  const needModels: { itemId: number; name: string; status: string }[] = []
+  for (let start = 0; start < listed.length; start += 50) {
+    const ids = listed.slice(start, start + 50).map((entry) => entry.itemId)
+    const base = obj((await shopCall('/api/v2/product/get_item_base_info', { item_id_list: ids.join(',') })).response)
+    for (const item of list(base.item_list)) {
+      const itemId = Number(item.item_id)
+      const status = statusById.get(itemId) ?? 'NORMAL'
+      const name = String(item.item_name ?? '')
+      let found = markMatched(normalizeSku(item.item_sku))
+      for (const sku of mappedByItem.get(itemId) ?? []) found = markMatched(sku) || found
+      if (found) continue
+      if (item.has_model === true) needModels.push({ itemId, name, status })
+      else unmatched.push({ itemId, sku: String(item.item_sku ?? ''), name, status })
+    }
+  }
+
+  // SKU induk kosong/berbeda: cek kode variasi, dengan 6 permintaan paralel agar kuota API aman.
+  let cursor = 0
+  await Promise.all(Array.from({ length: 6 }, async () => {
+    while (cursor < needModels.length) {
+      const entry = needModels[cursor]
+      cursor += 1
+      const models = list(obj((await shopCall('/api/v2/product/get_model_list', { item_id: entry.itemId })).response).model)
+      const skus = models.map((model) => normalizeSku(model.model_sku)).filter(Boolean)
+      let found = false
+      for (const sku of skus) found = markMatched(sku) || found
+      if (!found) unmatched.push({ itemId: entry.itemId, sku: skus[0] ?? '', name: entry.name, status: entry.status })
+    }
+  }))
+
+  const missing = [...master.values()].filter((entry) => !matched.has(entry.sku))
+  return {
+    totals: { master: master.size, uploaded: master.size - missing.length, missing: missing.length, extra: unmatched.length, listings: listed.length },
+    missing,
+    extra: unmatched.slice(0, 400),
+  }
+}
+
+// Daftar produk master yang belum punya listing Shopee; hasil sync disimpan agar panel cepat dibuka.
+export const shopeeMissingProducts = storeCall(storeLongOptions, async (request) => {
+  const data = input(request)
+  const syncRef = getFirestore().collection('shopeeCatalogSync').doc(currentStore())
+  if (data.refresh !== true) {
+    await requireStaff(request)
+    const saved = await syncRef.get()
+    if (!saved.exists) return { synced: false }
+    const { syncedAt, syncedBy: _syncedBy, ...cached } = saved.data() ?? {}
+    return { ...cached, synced: true, syncedAt: (syncedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0 }
+  }
+  await requireStaff(request, managers)
+  const result = await compareMasterWithShopee()
+  await syncRef.set({ ...result, syncedAt: FieldValue.serverTimestamp(), syncedBy: request.auth?.uid ?? '' })
+  return { synced: true, syncedAt: Date.now(), ...result }
 })
 
 export const shopeeVariantApply = onCall({ ...options, timeoutSeconds: 540 }, async (request) => {
@@ -1562,18 +1723,22 @@ async function currentMasterMarketplacePrice(sku: string, priceIndex: number): P
   return price
 }
 
-export const shopeeUpdatePrice = onCall(options, async (request) => {
+export const shopeeUpdatePrice = storeCall(storeOptions, async (request) => {
   await requireStaff(request, managers)
   const data = input(request)
   const itemId = whole(data.itemId, 'Item')
   const modelId = whole(data.modelId ?? 0, 'Varian')
   const price = whole(data.price, 'Harga')
   if (price < 100) throw new HttpsError('invalid-argument', 'Harga minimal Rp100.')
-  const mapping = shopeeMarginMappings.find((entry) => entry.itemId === itemId && entry.modelId === modelId && entry.ready)
+  // Harga minimum master Marketplace hanya berlaku untuk toko 2goFresh.
+  const enforceMasterMinimum = currentStore() === '2gofresh'
+  const mapping = enforceMasterMinimum
+    ? shopeeMarginMappings.find((entry) => entry.itemId === itemId && entry.modelId === modelId && entry.ready)
+    : undefined
   let minimumPrice: number | null = mapping?.marketplacePrice ?? null
   let masterSku: string | undefined = mapping?.sku
   let priceIndex: number | undefined = mapping?.marketplacePriceIndex
-  if (!mapping) {
+  if (enforceMasterMinimum && !mapping) {
     const models = obj((await shopCall('/api/v2/product/get_model_list', { item_id: itemId })).response)
     const model = list(models.model).find((entry) => Number(entry.model_id ?? 0) === modelId)
     const parsed = variantSkuMapping(String(model?.model_sku ?? ''))
@@ -1605,7 +1770,7 @@ export const shopeeUpdatePrice = onCall(options, async (request) => {
   return { ok: true }
 })
 
-export const shopeeUpdateStock = onCall(options, async (request) => {
+export const shopeeUpdateStock = storeCall(storeOptions, async (request) => {
   await requireStaff(request, managers)
   const data = input(request)
   const itemId = whole(data.itemId, 'Item')
@@ -1618,7 +1783,7 @@ export const shopeeUpdateStock = onCall(options, async (request) => {
   return { ok: true }
 })
 
-export const shopeeReturns = onCall(options, async (request) => {
+export const shopeeReturns = storeCall(storeOptions, async (request) => {
   await requireStaff(request)
   const result = obj((await shopCall('/api/v2/returns/get_return_list', { page_no: 0, page_size: 30 })).response)
   return {
@@ -1633,18 +1798,34 @@ export const shopeeReturns = onCall(options, async (request) => {
   }
 })
 
-export const shopeeChats = onCall(options, async (request) => {
-  await requireStaff(request)
+async function fetchConversations(type: 'all' | 'unread') {
   const all: Json[] = []
-  let params: Record<string, string | number> = { direction: 'older', type: 'all', page_size: 60, next_timestamp_nano: `${Date.now()}000000` }
+  let params: Record<string, string | number> = { direction: 'older', type, page_size: 60, next_timestamp_nano: `${Date.now()}000000` }
   for (let page = 0; page < 4; page += 1) {
     const result = obj((await shopCall('/api/v2/sellerchat/get_conversation_list', params)).response)
     all.push(...list(result.conversations))
     const paging = obj(result.page_result)
     const cursor = obj(paging.next_cursor)
-    if (page === 0) logger.info('shopeeChats paging', { paging: JSON.stringify(paging).slice(0, 300), first: list(result.conversations).slice(0, 3).map((entry) => `${String(entry.to_name)}:${String(entry.last_message_timestamp)}:${String(entry.latest_message_from_id)}`) })
     if (paging.more !== true || !cursor.next_message_time_nano) break
-    params = { direction: 'older', type: 'all', page_size: 60, next_timestamp_nano: String(cursor.next_message_time_nano) }
+    params = { direction: 'older', type, page_size: 60, next_timestamp_nano: String(cursor.next_message_time_nano) }
+  }
+  return all
+}
+
+// `unreadOnly` dipakai pengawas notifikasi: hanya percakapan yang belum dibaca di Shopee (termasuk yang sudah dibaca di Seller Center = hilang).
+export const shopeeChats = storeCall(storeOptions, async (request) => {
+  await requireStaff(request)
+  const unreadOnly = input(request).unreadOnly === true
+  let all: Json[]
+  if (unreadOnly) {
+    try {
+      all = await fetchConversations('unread')
+    } catch (error) {
+      logger.warn('Shopee unread chat filter failed; falling back to the full list.', { error })
+      all = (await fetchConversations('all')).filter((entry) => Number(entry.unread_count ?? 0) > 0)
+    }
+  } else {
+    all = await fetchConversations('all')
   }
   const seen = new Set<string>()
   const conversations = all
@@ -1661,11 +1842,26 @@ export const shopeeChats = onCall(options, async (request) => {
         lastAt: Math.round(Number(entry.last_message_timestamp ?? 0) / 1e6),
       }
     })
-    .filter((chat) => chat.id && !seen.has(chat.id) && !!seen.add(chat.id))
+    .filter((chat) => chat.id && (!unreadOnly || chat.unread > 0) && !seen.has(chat.id) && !!seen.add(chat.id))
     .sort((a, b) => b.lastAt - a.lastAt)
   return { conversations }
 })
-export const shopeeMessages = onCall(options, async (request) => {
+
+// Membuka chat di kasir juga menandainya terbaca di Shopee (best effort; gagal tidak mengganggu balas chat).
+export const shopeeMarkChatRead = storeCall(storeOptions, async (request) => {
+  await requireStaff(request)
+  const data = input(request)
+  const conversationId = str(data.conversationId, 'Percakapan', 40)
+  const lastMessageId = str(data.lastMessageId, 'Pesan terakhir', 80)
+  try {
+    await shopCall('/api/v2/sellerchat/read_conversation', {}, { conversation_id: conversationId, last_read_message_id: lastMessageId })
+    return { ok: true }
+  } catch (error) {
+    logger.warn('Shopee read_conversation failed.', { error })
+    return { ok: false }
+  }
+})
+export const shopeeMessages = storeCall(storeOptions, async (request) => {
   await requireStaff(request)
   const conversationId = str(input(request).conversationId, 'Percakapan', 40)
   const result = obj((await shopCall('/api/v2/sellerchat/get_message', { conversation_id: conversationId, page_size: 30 })).response)
@@ -1683,7 +1879,7 @@ export const shopeeMessages = onCall(options, async (request) => {
   }
 })
 
-export const shopeeSendMessage = onCall(options, async (request) => {
+export const shopeeSendMessage = storeCall(storeOptions, async (request) => {
   await requireStaff(request)
   const data = input(request)
   const text = str(data.text, 'Pesan', 500)

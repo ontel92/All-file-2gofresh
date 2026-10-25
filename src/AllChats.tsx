@@ -15,10 +15,11 @@ type Props = {
 
 // One place for every inbox: store live chat, Shopee, and (later) TikTok / Tokopedia.
 export default function AllChats({ chats, soundOn, onEnableSound, staffName, storeUnread }: Props) {
-  const [source, setSource] = useState<'store' | 'shopee' | 'tiktok'>('store')
-  const { shopeeUnreadChats } = useOps()
+  const [source, setSource] = useState<'store' | 'shopee' | 'freshstock' | 'tiktok'>('store')
+  const { shopeeUnreadChats, freshstockUnreadChats } = useOps()
   const tabs = [
-    { id: 'shopee', label: 'Shopee', count: shopeeUnreadChats },
+    { id: 'shopee', label: 'Shopee 2goFresh', count: shopeeUnreadChats },
+    { id: 'freshstock', label: 'Shopee Freshstock', count: freshstockUnreadChats },
     { id: 'store', label: 'Live Chat Store', count: storeUnread },
     { id: 'tiktok', label: 'Tokopedia / TikTok', count: 0 },
   ] as const
@@ -41,6 +42,7 @@ export default function AllChats({ chats, soundOn, onEnableSound, staffName, sto
       </div>
       {source === 'store' && <LiveChat chats={chats} soundOn={soundOn} onEnableSound={onEnableSound} staffName={staffName} />}
       {source === 'shopee' && <ShopeeChat />}
+      {source === 'freshstock' && <ShopeeChat store="freshstock" />}
       {source === 'tiktok' && (
         <section className="sp-connect">
           <h2>Chat Tokopedia / TikTok Shop</h2>

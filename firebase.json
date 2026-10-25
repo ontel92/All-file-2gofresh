@@ -28,6 +28,13 @@
         }
       },
       {
+        "source": "/shopee/callback-freshstock",
+        "function": {
+          "functionId": "shopeeCallbackFreshstock",
+          "region": "asia-southeast2"
+        }
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

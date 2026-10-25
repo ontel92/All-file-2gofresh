@@ -5,5 +5,12 @@
 .ops-toast-body span { overflow-wrap: anywhere; color: #666; }
 .ops-toast-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.3rem; }
 .ops-toast-actions button { border: 1px solid #07775a; background: #07775a; color: #fff; border-radius: 6px; padding: 0.25rem 0.6rem; cursor: pointer; font-size: 0.8rem; }
+.ops-toast.store-2gofresh { border-left-color: #ee4d2d; }
+.ops-toast.store-2gofresh .ops-toast-actions button { border-color: #ee4d2d; background: #ee4d2d; }
+.ops-toast.store-freshstock { border-left-color: #2e7d32; }
+.ops-toast.store-freshstock .ops-toast-actions button { border-color: #2e7d32; background: #2e7d32; }
+.ops-toast-tag { justify-self: start; font-style: normal; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; padding: 0.05rem 0.5rem; border-radius: 999px; background: #f1f1f1; color: #555; }
+.store-2gofresh .ops-toast-tag { background: #fff4f1; color: #d73211; }
+.store-freshstock .ops-toast-tag { background: #f1f8f1; color: #1b5e20; }
 .ops-toast-close { border: 0; background: transparent; font-size: 1.3rem; line-height: 1; cursor: pointer; color: #888; }
 @keyframes ops-in { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }

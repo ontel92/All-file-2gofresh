@@ -35,7 +35,7 @@ import AllChats from './AllChats'
 import StaffOnline, { useOnlineStaff, usePresence } from './StaffOnline'
 import MarketplaceTiktok from './MarketplaceTiktok'
 import OpsToasts from './OpsToasts'
-import { playSound, pushToast, setOps, useOps } from './opsStore'
+import { pushToast, setOps, useOps } from './opsStore'
 import MarketplaceShopee from './MarketplaceShopee'
 import RetailMembers from './RetailMembers'
 import { useMemberData } from './memberData'
@@ -90,6 +90,7 @@ const posNavigation = [
   { id: 'pending', label: 'Pending Order', icon: '⏳', group: 'KASIR', ready: true },
   { id: 'expenses', label: 'Pengeluaran Kas', icon: '🧾', group: 'KAS & SHIFT', ready: true },
   { id: 'closing', label: 'Closing Shift', icon: '📕', group: 'KAS & SHIFT', ready: true },
+  { id: 'monitor', label: 'Kasir Online', icon: '👩🏻‍💻', group: 'KAS & SHIFT', ready: true },
   { id: 'sales-history', label: 'Riwayat Penjualan', icon: '📜', group: 'LAPORAN & DATA', ready: true },
   { id: 'catalog', label: 'Katalog Produk', icon: '📒', group: 'LAPORAN & DATA', ready: true },
   { id: 'product-upload', label: 'Upload Produk', icon: '⬆', group: 'LAPORAN & DATA', ready: true },
@@ -100,7 +101,6 @@ const posNavigation = [
   { id: 'marketplace', label: 'Marketplace Shopee', icon: '🟧', group: 'ONLINE', ready: true },
   { id: 'marketplace-margin', label: 'Margin Marketplace', icon: '📈', group: 'ONLINE', ready: true },
   { id: 'tiktok', label: 'Marketplace Tokopedia/TikTok', icon: 'ᕷ', group: 'ONLINE', ready: true },
-  { id: 'monitor', label: 'Kasir Online', icon: '👩🏻‍💻', group: 'KAS & SHIFT', ready: true },
   { id: 'chat', label: 'Semua Chat', icon: '🗫', group: 'ONLINE', ready: true },
 ] as const
 
@@ -973,10 +973,9 @@ function PosApp() {
     const fresh = webOrderData.orders.filter((order) => order.status === 'new' && !seen?.has(order.id))
     knownWebOrders.current = new Set(webOrderData.orders.map((order) => order.id))
     if (!seen || fresh.length === 0) return
-    playSound('/order_masuk.mp3')
-    for (const order of fresh) {
-      pushToast({ icon: '🛒', title: `Web Order baru ${order.orderNo}`, body: `${order.customerName || 'Pelanggan'} · ${currency.format(order.total)}`, sticky: true, actions: [{ label: 'Buka Web Order', panel: 'web-order' }] })
-    }
+    fresh.forEach((order, index) => {
+      pushToast({ icon: '🛒', title: `Web Order baru ${order.orderNo}`, body: `${order.customerName || 'Pelanggan'} · ${currency.format(order.total)}`, sticky: true, sound: index === 0 ? '/order_masuk.mp3' : undefined, actions: [{ label: 'Buka Web Order', panel: 'web-order' }] })
+    })
   }, [webOrderData.orders])
 
   useEffect(() => {
@@ -1549,7 +1548,7 @@ function PosApp() {
     (item) => item.id === 'monitor' ? canManageStock : canManageStock || (item.ready && item.id !== 'stock' && item.id !== 'b2b-members'),
   )
   const navBadge = (id: string) =>
-    id === 'retail-members' ? memberData.pendingCount : id === 'web-order' ? webOrderData.newCount : id === 'chat' ? chatData.unreadTotal + ops.shopeeUnreadChats : id === 'marketplace' ? ops.shopeeToShip : id === 'monitor' ? staffOnline.online.length : 0
+    id === 'retail-members' ? memberData.pendingCount : id === 'web-order' ? webOrderData.newCount : id === 'chat' ? chatData.unreadTotal + ops.shopeeUnreadChats + ops.freshstockUnreadChats : id === 'marketplace' ? ops.shopeeToShip + ops.freshstockToShip : id === 'monitor' ? staffOnline.online.length : 0
   const canManageStaff = profile.role === 'owner' || profile.role === 'supervisor'
   const roleLabel = {
     owner: 'Owner · akses penuh',
@@ -1920,6 +1919,7 @@ function PosApp() {
         </section>
       </div>
       <ShopeeWatcher />
+      <ShopeeWatcher store="freshstock" />
       <OpsToasts />
       <YubiCalculator />
     </main>

@@ -20,13 +20,15 @@ export * from './shopee'
 
 const shiftCallableOptions = {
   region: 'asia-southeast2',
-  memory: '256MiB',
+  memory: '512MiB',
   maxInstances: 3,
   serviceAccount: 'catalog-sync-runtime@gofresh-3f2f3.iam.gserviceaccount.com',
   timeoutSeconds: 60,
 } as const
 
 const chatCallableOptions = { ...shiftCallableOptions, memory: '512MiB' } as const
+// Closing memuat googleapis + nodemailer; di 256 MiB proses sempat dimatikan (OOM) setelah shift tertutup.
+const shiftCloseOptions = { ...shiftCallableOptions, memory: '512MiB', timeoutSeconds: 120 } as const
 
 const spreadsheetId = '1Z3GxcqyB2DxGmfJcMuWvjDFKRRv7jceAlHPvfQ_zHR8'
 const collectionName = 'catalogProducts'
@@ -307,7 +309,7 @@ export const syncCatalogFromSheets = onSchedule(
     schedule: 'every 5 minutes',
     timeZone: 'Asia/Jakarta',
     region: 'asia-southeast2',
-    memory: '256MiB',
+    memory: '512MiB',
     timeoutSeconds: 300,
     maxInstances: 1,
     concurrency: 1,
@@ -407,7 +409,7 @@ export const syncCatalogFromSheets = onSchedule(
 export const initializeCashierAccounts = onCall(
   {
     region: 'asia-southeast2',
-    memory: '256MiB',
+    memory: '512MiB',
     maxInstances: 3,
     serviceAccount: 'catalog-sync-runtime@gofresh-3f2f3.iam.gserviceaccount.com',
   },
@@ -469,7 +471,7 @@ export const initializeCashierAccounts = onCall(
 export const loginWithStaffId = onCall(
   {
     region: 'asia-southeast2',
-    memory: '256MiB',
+    memory: '512MiB',
     maxInstances: 5,
     serviceAccount: 'catalog-sync-runtime@gofresh-3f2f3.iam.gserviceaccount.com',
   },
@@ -548,7 +550,7 @@ export const loginWithStaffId = onCall(
 export const getStaffSession = onCall(
   {
     region: 'asia-southeast2',
-    memory: '256MiB',
+    memory: '512MiB',
     maxInstances: 5,
     serviceAccount: 'catalog-sync-runtime@gofresh-3f2f3.iam.gserviceaccount.com',
   },
@@ -582,7 +584,7 @@ export const getStaffSession = onCall(
 export const changeStaffPassword = onCall(
   {
     region: 'asia-southeast2',
-    memory: '256MiB',
+    memory: '512MiB',
     maxInstances: 3,
     serviceAccount: 'catalog-sync-runtime@gofresh-3f2f3.iam.gserviceaccount.com',
   },
@@ -625,7 +627,7 @@ export const changeStaffPassword = onCall(
 export const resetCashierPassword = onCall(
   {
     region: 'asia-southeast2',
-    memory: '256MiB',
+    memory: '512MiB',
     maxInstances: 3,
     serviceAccount: 'catalog-sync-runtime@gofresh-3f2f3.iam.gserviceaccount.com',
   },
@@ -702,7 +704,7 @@ export const resetCashierPassword = onCall(
 export const setOpeningStock = onCall(
   {
     region: 'asia-southeast2',
-    memory: '256MiB',
+    memory: '512MiB',
     maxInstances: 3,
     serviceAccount: 'catalog-sync-runtime@gofresh-3f2f3.iam.gserviceaccount.com',
   },
@@ -1595,7 +1597,7 @@ export const createB2bSale = onCall(
 export const voidSale = onCall(
   {
     region: 'asia-southeast2',
-    memory: '256MiB',
+    memory: '512MiB',
     maxInstances: 3,
     serviceAccount: 'catalog-sync-runtime@gofresh-3f2f3.iam.gserviceaccount.com',
     timeoutSeconds: 60,
@@ -2157,7 +2159,7 @@ export const removeCashExpense = onCall(shiftCallableOptions, async (request) =>
   return { ok: true }
 })
 
-export const closeShift = onCall({ ...shiftCallableOptions, secrets: [reportSmtpUser, reportSmtpPass] }, async (request) => {
+export const closeShift = onCall({ ...shiftCloseOptions, secrets: [reportSmtpUser, reportSmtpPass] }, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Silakan login ke POS terlebih dahulu.')
   }
@@ -2217,9 +2219,52 @@ export const closeShift = onCall({ ...shiftCallableOptions, secrets: [reportSmtp
     return { shiftId: shiftRef.id, expectedCash, countedCash, difference }
   })
   logger.info('Shift closed.', { ...summary, actorUid: uid })
-  const report = await buildShiftReport(summary.shiftId, staff.displayName ?? '')
-  const emailSent = await sendShiftReportEmail(summary.shiftId, report.text, report.cashierName)
-  return { ...summary, reportText: report.text, emailSent }
+  // Shift sudah tersimpan; kegagalan laporan tidak boleh membuat closing tampak gagal.
+  let reportText: string | undefined
+  let emailSent = false
+  try {
+    const report = await buildShiftReport(summary.shiftId, staff.displayName ?? '')
+    reportText = report.text
+    emailSent = await sendShiftReportEmail(summary.shiftId, report.text, report.cashierName)
+  } catch (error) {
+    logger.error('Shift report could not be prepared.', { shiftId: summary.shiftId, message: error instanceof Error ? error.message : String(error) })
+  }
+  return { ...summary, reportText, emailSent }
+})
+
+// Dipakai aplikasi bila respons closeShift terputus setelah shift sempat tertutup.
+export const closedShiftReport = onCall({ ...shiftCloseOptions, secrets: [reportSmtpUser, reportSmtpPass] }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Silakan login ke POS terlebih dahulu.')
+  }
+  const staff = await requireStaffRole(request.auth.uid, ['owner', 'supervisor', 'cashier'])
+  const shiftId = callableData(request.data).shiftId
+  if (typeof shiftId !== 'string' || !shiftId || shiftId.length > 100) {
+    throw new HttpsError('invalid-argument', 'Shift tidak valid.')
+  }
+  const shiftRef = getFirestore().collection('shifts').doc(shiftId)
+  const shift = await shiftRef.get()
+  const closedAt = (shift.get('closedAt') as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0
+  if (!shift.exists || shift.get('status') !== 'closed' || Date.now() - closedAt > 6 * 3600 * 1000) {
+    throw new HttpsError('failed-precondition', 'Shift ini belum ditutup atau sudah lama.')
+  }
+  if (staff.role === 'cashier' && shift.get('cashierUid') !== request.auth.uid && shift.get('closedByUid') !== request.auth.uid) {
+    throw new HttpsError('permission-denied', 'Laporan ini bukan untuk akun Anda.')
+  }
+  let reportText = typeof shift.get('reportText') === 'string' ? (shift.get('reportText') as string) : ''
+  if (!reportText) {
+    const report = await buildShiftReport(shiftId, staff.displayName ?? '')
+    reportText = report.text
+    await shiftRef.update({ reportText })
+  }
+  return {
+    shiftId,
+    expectedCash: Number(shift.get('expectedCash') ?? 0),
+    countedCash: Number(shift.get('countedCash') ?? 0),
+    difference: Number(shift.get('difference') ?? 0),
+    reportText,
+    emailSent: shift.get('reportEmail') === 'sent',
+  }
 })
 
 type NewCatalogProduct = {
