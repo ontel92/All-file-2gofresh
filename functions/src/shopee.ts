@@ -22,7 +22,14 @@ const partnerKeySecret = defineSecret('SHOPEE_PARTNER_KEY')
 const options = {
   ...shopeeOptions,
   secrets: [partnerIdSecret, partnerKeySecret],
-  cors: ['http://127.0.0.1:5173', 'http://localhost:5173', 'https://kasir.2gofresh.com', 'https://www.kasir.2gofresh.com'],
+  cors: [
+    'http://127.0.0.1:5173',
+    'http://localhost:5173',
+    'https://localhost',
+    'capacitor://localhost',
+    'https://kasir.2gofresh.com',
+    'https://www.kasir.2gofresh.com',
+  ],
 }
 const shopeeHost = { value: () => process.env.SHOPEE_HOST ?? 'https://partner.shopeemobile.com' }
 
