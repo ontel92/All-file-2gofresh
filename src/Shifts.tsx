@@ -4,6 +4,7 @@ import { collection, doc, limit, onSnapshot, orderBy, query, where } from 'fireb
 import { httpsCallable } from 'firebase/functions'
 import { database } from './firebase'
 import { auth, functions } from './posFirebase'
+import { useOfflineSales, useOnlineStatus } from './offlineSales'
 import './Shifts.css'
 
 export type ExpenseCategory = 'nempil' | 'sales' | 'ops'
@@ -649,6 +650,8 @@ export function ClosingPanel({
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const queuedSales = useOfflineSales().length
+  const online = useOnlineStatus()
 
   let body = <section className="ct-card"><p>Belum ada shift yang terbuka.</p></section>
   if (shift) {
@@ -766,12 +769,17 @@ export function ClosingPanel({
                 </label>
               )}
               {error && <p className="rc-warning" role="alert">{error}</p>}
+              {queuedSales > 0 && (
+                <p className="rc-warning" role="alert">
+                  Masih ada {queuedSales} penjualan offline yang belum terkirim ke server. Tunggu sampai internet tersambung dan semuanya terkirim (cek tombol oranye di kiri bawah) sebelum closing, agar uang laci cocok dengan laporan.
+                </p>
+              )}
               <button
                 type="submit"
                 className="sf-primary"
-                disabled={busy || !hasCount || (difference !== 0 && note.trim().length < 3)}
+                disabled={busy || queuedSales > 0 || !online || !hasCount || (difference !== 0 && note.trim().length < 3)}
               >
-                {busy ? 'Menutup shift...' : 'Closing Shift'}
+                {busy ? 'Menutup shift...' : !online ? 'Closing butuh internet' : 'Closing Shift'}
               </button>
             </>
           ) : (

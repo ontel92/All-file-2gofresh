@@ -25,3 +25,15 @@ functions/lib
 *.njsproj
 *.sln
 *.sw?
+
+# Android build outputs and caches
+android/.gradle/
+android/build/
+android/app/build/
+android/.idea/
+android/*.iml
+android/app/*.iml
+android/local.properties
+android/captures/
+android/.externalNativeBuild/
+android/.cxx/

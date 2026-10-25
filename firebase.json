@@ -19,6 +19,12 @@
       "**/.*",
       "**/node_modules/**"
     ],
+    "headers": [
+      {
+        "source": "**/{sw.js,precache.json,pos.webmanifest}",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      }
+    ],
     "rewrites": [
       {
         "source": "/shopee/callback",

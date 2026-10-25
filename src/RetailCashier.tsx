@@ -7,6 +7,8 @@ import { StoreContact, StoreQr } from './StoreQr'
 import { paidReceiptText, whatsappLink } from './receiptText'
 import { normalizePhone, parseDecimal, parseNumber, priceLine, retailPerKg } from './retailPricing'
 import type { CartLine, RetailProduct } from './retailPricing'
+import { useOnlineStatus } from './offlineSales'
+import type { SaleDraft } from './offlineSales'
 
 export type SaleReceipt = {
   receiptNo: string
@@ -21,6 +23,8 @@ export type SaleReceipt = {
   channel?: 'retail'
   memberName?: string
   memberPhone?: string
+  // Struk sementara: penjualan dicatat saat offline dan belum dikirim ke server.
+  offlinePending?: boolean
 }
 
 export type SaleRequest = {
@@ -39,7 +43,7 @@ type Props = {
   resumedLabel: string | null
   waPhone: string
   setWaPhone: (value: string) => void
-  onSale: (request: SaleRequest) => Promise<SaleReceipt>
+  onSale: (request: SaleRequest, draft: SaleDraft) => Promise<SaleReceipt>
   onPend: (label: string, waPhone: string) => Promise<void>
 }
 
@@ -73,6 +77,7 @@ function RetailCashier({
   const [printMessage, setPrintMessage] = useState('')
   const [printerPrompt, setPrinterPrompt] = useState(false)
   const printer = usePrinter()
+  const online = useOnlineStatus()
   const requestIdRef = useRef<string | null>(null)
 
   const productBySku = useMemo(
@@ -95,11 +100,12 @@ function RetailCashier({
     return { line, product, result: product ? priceLine(product, line) : null }
   })
   const total = priced.reduce((sum, row) => sum + (row.result?.total ?? 0), 0)
-  const stockProblem = priced.find((row) => {
+  // Saat offline, stok di tablet hanya salinan terakhir: penjualan tetap boleh dan stok minus ditandai setelah sinkron.
+  const stockProblem = online ? priced.find((row) => {
     if (!row.product || !row.result) return false
     const stock = stockBySku[row.product.sku.toLowerCase()]
     return stock === undefined || stock < row.result.quantity
-  })
+  }) : undefined
   const normalizedWa = waPhone.trim() === '' ? null : normalizePhone(waPhone)
   const waInvalid = orderSource === 'wa' && !normalizedWa
   const cashValue = parseNumber(cashInput)
@@ -110,7 +116,7 @@ function RetailCashier({
     !stockProblem &&
     !paying &&
     (method === 'qris'
-      ? /^[A-Za-z0-9][A-Za-z0-9._/-]{5,39}$/.test(qrisReference.trim())
+      ? !online || /^[A-Za-z0-9][A-Za-z0-9._/-]{5,39}$/.test(qrisReference.trim())
       : Number.isFinite(cashValue) && cashValue >= total)
 
   function chooseSource(next: 'offline' | 'wa') {
@@ -189,6 +195,23 @@ function RetailCashier({
     setError('')
     requestIdRef.current ??= crypto.randomUUID()
     try {
+      // Konfirmasi QRIS manual saat offline: nomor referensi dibuat otomatis jika kasir tidak mengisinya.
+      const enteredReference = qrisReference.trim().toUpperCase()
+      const reference = method === 'qris'
+        ? (enteredReference || `MANUAL-${requestIdRef.current.slice(0, 8).toUpperCase()}`)
+        : undefined
+      const draft: SaleDraft = {
+        items: priced.map(({ product, result }) => ({
+          sku: product!.sku,
+          name: product!.name,
+          unit: product!.unit,
+          quantity: result!.quantity,
+          total: result!.total,
+        })),
+        total,
+        change: method === 'cash' ? Math.max(0, cashValue - total) : 0,
+        extra: reference ? { qrisReference: reference } : undefined,
+      }
       const sale = await onSale({
         items: priced.map(({ line, result }) =>
           line.mode === 'nominal'
@@ -197,9 +220,9 @@ function RetailCashier({
         ),
         paymentMethod: method,
         cashReceived: method === 'cash' ? cashValue : undefined,
-        qrisReference: method === 'qris' ? qrisReference.trim().toUpperCase() : undefined,
+        qrisReference: reference,
         requestId: requestIdRef.current,
-      })
+      }, draft)
       requestIdRef.current = null
       const fullSale: SaleReceipt = { ...sale, channel: 'retail', memberPhone: normalizedWa ?? undefined }
       setReceipt(fullSale)
@@ -264,7 +287,7 @@ function RetailCashier({
                       <button
                         type="button"
                         className="rc-add"
-                        disabled={!stock}
+                        disabled={online && !stock}
                         onClick={() => addProduct(product)}
                       >
                         + Tambah
@@ -364,10 +387,13 @@ function RetailCashier({
                   </p>
                 )}
                 {!result && <p className="rc-warning">Jumlah belum valid.</p>}
-                {result && (stockBySku[product.sku.toLowerCase()] ?? 0) < result.quantity && (
+                {result && online && (stockBySku[product.sku.toLowerCase()] ?? 0) < result.quantity && (
                   <p className="rc-warning">
                     Stok hanya {quantityFormat.format(stockBySku[product.sku.toLowerCase()] ?? 0)} {product.unit}.
                   </p>
+                )}
+                {result && !online && (stockBySku[product.sku.toLowerCase()] ?? 0) < result.quantity && (
+                  <p className="rc-hint">Offline: stok di tablet tinggal {quantityFormat.format(stockBySku[product.sku.toLowerCase()] ?? 0)} {product.unit}; penjualan tetap dicatat dan ditandai untuk dicek.</p>
                 )}
               </article>
             )
@@ -423,7 +449,7 @@ function RetailCashier({
           )}
           {method === 'qris' && (
             <label className="rc-cash">
-              <span>No. Transaksi QRIS/EDC (wajib)</span>
+              <span>{online ? 'No. Transaksi QRIS/EDC (wajib)' : 'No. Transaksi QRIS/EDC (boleh kosong saat offline)'}</span>
               <input
                 value={qrisReference}
                 onChange={(event) => setQrisReference(event.target.value)}
@@ -432,7 +458,9 @@ function RetailCashier({
                 autoComplete="off"
               />
               <small className="rc-hint">
-                Isi setelah pembeli selesai membayar. Tombol cetak aktif setelah nomor diisi.
+                {online
+                  ? 'Isi setelah pembeli selesai membayar. Tombol cetak aktif setelah nomor diisi.'
+                  : 'Offline: pastikan pembayaran sudah masuk (cek notifikasi QRIS/mutasi), lalu konfirmasi manual. Nomor dibuat otomatis jika dikosongkan.'}
               </small>
             </label>
           )}
@@ -483,6 +511,9 @@ function RetailCashier({
             <StoreContact />
             <p><strong>STRUK PEMBELIAN</strong></p>
             <p>{receipt.receiptNo}</p>
+            {receipt.offlinePending && (
+              <p className="rc-hint"><strong>Struk sementara (offline).</strong> Nomor final dibuat setelah data terkirim ke server.</p>
+            )}
             <p>{new Date(receipt.createdAtIso).toLocaleString('id-ID')} · Kasir {receipt.cashierName}</p>
             <hr />
             {receipt.items.map((item) => (

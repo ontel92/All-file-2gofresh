@@ -1,5 +1,5 @@
 import { getApp, getApps, initializeApp } from 'firebase/app'
-import { getFirestore } from 'firebase/firestore'
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
 
 const firebaseConfig = {
   apiKey: 'AIzaSyDF7dseFJzdiP7_go0ucGHriJTu_uspEiA',
@@ -10,4 +10,16 @@ const firebaseConfig = {
 
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig)
 
-export const database = getFirestore(app)
+// Aplikasi POS menyimpan salinan katalog, stok, shift, dan member di perangkat agar tetap terbaca saat internet mati.
+const isPosHost = /^(www\.)?kasir\./i.test(window.location.hostname)
+
+function createDatabase() {
+  if (!isPosHost) return getFirestore(app)
+  try {
+    return initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) })
+  } catch {
+    return getFirestore(app)
+  }
+}
+
+export const database = createDatabase()

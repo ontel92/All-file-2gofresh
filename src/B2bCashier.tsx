@@ -7,6 +7,8 @@ import CashInput from './CashInput'
 import { StoreContact, StoreQr } from './StoreQr'
 import { normalizePhone, parseDecimal, parseNumber, priceB2bLine } from './retailPricing'
 import type { CartLine, RetailProduct } from './retailPricing'
+import { useOnlineStatus } from './offlineSales'
+import type { SaleDraft } from './offlineSales'
 
 export type B2bMember = { phone: string; name: string; active: boolean }
 
@@ -31,6 +33,8 @@ export type B2bReceipt = {
   memberName: string
   cashierName: string
   createdAtIso: string
+  // Struk sementara: penjualan dicatat saat offline dan belum dikirim ke server.
+  offlinePending?: boolean
 }
 
 type Props = {
@@ -42,7 +46,7 @@ type Props = {
   phone: string
   setPhone: (value: string) => void
   resumedLabel: string | null
-  onSale: (request: B2bSaleRequest) => Promise<B2bReceipt>
+  onSale: (request: B2bSaleRequest, draft: SaleDraft) => Promise<B2bReceipt>
   onPend: (memberPhone: string, memberName: string) => Promise<void>
 }
 
@@ -76,6 +80,7 @@ function B2bCashier({
   const [printMessage, setPrintMessage] = useState('')
   const [printerPrompt, setPrinterPrompt] = useState(false)
   const printer = usePrinter()
+  const online = useOnlineStatus()
   const requestIdRef = useRef<string | null>(null)
 
   const productBySku = useMemo(
@@ -104,7 +109,8 @@ function B2bCashier({
     return { line, product, result: product ? priceB2bLine(product, line) : null }
   })
   const total = priced.reduce((sum, row) => sum + (row.result?.total ?? 0), 0)
-  const stockProblem = priced.some((row) => {
+  // Saat offline, stok di tablet hanya salinan terakhir: penjualan tetap boleh dan stok minus ditandai setelah sinkron.
+  const stockProblem = online && priced.some((row) => {
     if (!row.product || !row.result) return false
     const stock = stockBySku[row.product.sku.toLowerCase()]
     return stock === undefined || stock < row.result.quantity
@@ -114,7 +120,7 @@ function B2bCashier({
   const paymentReady =
     method === 'cash'
       ? Number.isFinite(cashValue) && cashValue >= total
-      : referencePattern.test(reference.trim())
+      : !online || referencePattern.test(reference.trim())
   const canPay = cartReady && memberValid && paymentReady && !busy
   const canPend = cart.length > 0 && memberValid && priced.every((row) => row.result !== null) && !busy
 
@@ -188,14 +194,35 @@ function B2bCashier({
     setError('')
     requestIdRef.current ??= crypto.randomUUID()
     try {
+      // Konfirmasi manual saat offline: nomor referensi dibuat otomatis jika kasir tidak mengisinya.
+      const enteredReference = reference.trim().toUpperCase()
+      const paymentReference = method === 'cash'
+        ? undefined
+        : (enteredReference || `MANUAL-${requestIdRef.current.slice(0, 8).toUpperCase()}`)
+      const draft: SaleDraft = {
+        items: priced.map(({ product, result }) => ({
+          sku: product!.sku,
+          name: product!.name,
+          unit: product!.unit,
+          quantity: result!.quantity,
+          total: result!.total,
+        })),
+        total,
+        change: method === 'cash' ? Math.max(0, cashValue - total) : 0,
+        extra: {
+          memberPhone: member.phone,
+          memberName: member.name,
+          paymentReference: paymentReference ?? null,
+        },
+      }
       const sale = await onSale({
         items: priced.map(({ line, result }) => ({ sku: line.sku, quantity: result!.quantity })),
         memberPhone: member.phone,
         paymentMethod: method,
         cashReceived: method === 'cash' ? cashValue : undefined,
-        paymentReference: method === 'cash' ? undefined : reference.trim().toUpperCase(),
+        paymentReference,
         requestId: requestIdRef.current,
-      })
+      }, draft)
       requestIdRef.current = null
       setReceipt(sale)
       setPrintMessage('')
@@ -254,7 +281,7 @@ function B2bCashier({
                       <button
                         type="button"
                         className="rc-add"
-                        disabled={!stock}
+                        disabled={online && !stock}
                         onClick={() => addProduct(product)}
                       >
                         + Tambah
@@ -356,8 +383,11 @@ function B2bCashier({
                 </div>
                 <p className="rc-hint">{currency.format(product.retailPrice)}/{product.unit}</p>
                 {!result && <p className="rc-warning">Jumlah belum valid.</p>}
-                {result && stock < result.quantity && (
+                {result && online && stock < result.quantity && (
                   <p className="rc-warning">Stok hanya {quantityFormat.format(stock)} {product.unit}.</p>
+                )}
+                {result && !online && stock < result.quantity && (
+                  <p className="rc-hint">Offline: stok di tablet tinggal {quantityFormat.format(stock)} {product.unit}; penjualan tetap dicatat dan ditandai untuk dicek.</p>
                 )}
               </article>
             )
@@ -389,7 +419,7 @@ function B2bCashier({
             <CashInput value={cashInput} onChange={setCashInput} total={total} />
           ) : (
             <label className="rc-cash">
-              <span>{method === 'transfer' ? 'No. Referensi Bukti Transfer (wajib)' : 'No. Transaksi QRIS/EDC (wajib)'}</span>
+              <span>{method === 'transfer' ? 'No. Referensi Bukti Transfer' : 'No. Transaksi QRIS/EDC'}{online ? ' (wajib)' : ' (boleh kosong saat offline)'}</span>
               <input
                 value={reference}
                 onChange={(event) => setReference(event.target.value)}
@@ -398,7 +428,9 @@ function B2bCashier({
                 autoComplete="off"
               />
               <small className="rc-hint">
-                Belum ada bukti pembayaran valid? Klik Pending Order, lalu kirim tagihan via WhatsApp dari panel Pending Order.
+                {online
+                  ? 'Belum ada bukti pembayaran valid? Klik Pending Order, lalu kirim tagihan via WhatsApp dari panel Pending Order.'
+                  : 'Offline: pastikan pembayaran sudah masuk (cek mutasi/notifikasi), lalu konfirmasi manual. Nomor dibuat otomatis jika dikosongkan.'}
               </small>
             </label>
           )}
@@ -438,6 +470,9 @@ function B2bCashier({
             <StoreContact />
             <p><strong>STRUK LUNAS B2B</strong></p>
             <p>{receipt.receiptNo}</p>
+            {receipt.offlinePending && (
+              <p className="rc-hint"><strong>Struk sementara (offline).</strong> Nomor final dibuat setelah data terkirim ke server.</p>
+            )}
             <p>{new Date(receipt.createdAtIso).toLocaleString('id-ID')} · Kasir {receipt.cashierName}</p>
             <p>Member B2B: {receipt.memberName}</p>
             <hr />

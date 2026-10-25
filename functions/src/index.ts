@@ -1159,6 +1159,26 @@ function priceSaleLine(
   return { quantity, total }
 }
 
+function parseOfflineInfo(value: unknown): { soldAtMs: number; draftReceiptNo: string } | null {
+  if (value === undefined || value === null) return null
+  const data = callableData(value)
+  const soldAtMs = data.soldAtMs
+  const draftReceiptNo = data.draftReceiptNo
+  const now = Date.now()
+  if (
+    typeof soldAtMs !== 'number' ||
+    !Number.isFinite(soldAtMs) ||
+    soldAtMs > now + 5 * 60 * 1000 ||
+    soldAtMs < now - 14 * 24 * 3600 * 1000 ||
+    typeof draftReceiptNo !== 'string' ||
+    draftReceiptNo.length === 0 ||
+    draftReceiptNo.length > 40
+  ) {
+    throw new HttpsError('invalid-argument', 'Data penjualan offline tidak valid.')
+  }
+  return { soldAtMs, draftReceiptNo }
+}
+
 export const createRetailSale = onCall(
   {
     region: 'asia-southeast2',
@@ -1181,6 +1201,7 @@ export const createRetailSale = onCall(
     const requestId = input.requestId
     const paymentMethod = input.paymentMethod
     const cashReceived = input.cashReceived
+    const offlineInfo = parseOfflineInfo(input.offline)
     const qrisReference =
       typeof input.qrisReference === 'string' ? input.qrisReference.trim().toUpperCase() : ''
     if (paymentMethod === 'qris' && !/^[A-Z0-9][A-Z0-9._/-]{5,39}$/.test(qrisReference)) {
@@ -1273,13 +1294,16 @@ export const createRetailSale = onCall(
             product.sku,
           )
           const onHand = stockSnapshot.exists ? stockSnapshot.get('onHand') : null
-          if (typeof onHand !== 'number' || !Number.isFinite(onHand) || onHand < line.quantity) {
+          const known = typeof onHand === 'number' && Number.isFinite(onHand)
+          const short = !known || onHand < line.quantity
+          // Penjualan yang dicatat saat offline tidak ditolak karena stok; stok minus ditandai untuk dicek.
+          if (short && !offlineInfo) {
             throw new HttpsError(
               'failed-precondition',
-              `Stok ${product.name} tidak cukup (tersisa ${typeof onHand === 'number' ? onHand : 0} ${unit}).`,
+              `Stok ${product.name} tidak cukup (tersisa ${known ? onHand : 0} ${unit}).`,
             )
           }
-          return { entry, product, unit, line, onHand }
+          return { entry, product, unit, line, onHand: known ? onHand : 0, short }
         }),
       )
 
@@ -1307,7 +1331,7 @@ export const createRetailSale = onCall(
         total: line.total,
       }))
 
-      for (const { entry, product, unit, line, onHand } of resolved) {
+      for (const { entry, product, unit, line, onHand, short } of resolved) {
         const newOnHand = Math.round((onHand - line.quantity) * 1000) / 1000
         transaction.set(entry.inventoryRef, {
           sku: product.sku,
@@ -1323,7 +1347,7 @@ export const createRetailSale = onCall(
           previousOnHand: onHand,
           newOnHand,
           quantityDelta: -line.quantity,
-          reason: `Penjualan retail ${receiptNo}`,
+          reason: `Penjualan retail ${receiptNo}${short ? ' (offline, stok minus)' : ''}`,
           actorUid: request.auth!.uid,
           createdAt: FieldValue.serverTimestamp(),
         })
@@ -1349,7 +1373,16 @@ export const createRetailSale = onCall(
         cashierUid: request.auth!.uid,
         cashierName: staff.displayName,
         shiftId,
-        createdAtIso: new Date().toISOString(),
+        createdAtIso: offlineInfo ? new Date(offlineInfo.soldAtMs).toISOString() : new Date().toISOString(),
+        ...(offlineInfo
+          ? {
+              offline: true,
+              offlineReceiptNo: offlineInfo.draftReceiptNo,
+              stockFlags: resolved
+                .filter((row) => row.short)
+                .map((row) => ({ sku: row.product.sku as string, quantity: row.line.quantity, onHandBefore: row.onHand })),
+            }
+          : {}),
       }
       transaction.create(saleRef, { ...sale, createdAt: FieldValue.serverTimestamp() })
       recordShiftSale(transaction, shiftId, 'retail', paymentMethod, total, 1)
@@ -1393,6 +1426,7 @@ export const createB2bSale = onCall(
     const requestId = input.requestId
     const paymentMethod = input.paymentMethod
     const cashReceived = input.cashReceived
+    const offlineInfo = parseOfflineInfo(input.offline)
     const memberPhone = input.memberPhone
     const reference =
       typeof input.paymentReference === 'string' ? input.paymentReference.trim().toUpperCase() : ''
@@ -1505,13 +1539,16 @@ export const createB2bSale = onCall(
             throw new HttpsError('invalid-argument', `Jumlah ${product.name} (${unit}) harus bilangan bulat.`)
           }
           const onHand = stockSnapshot.exists ? stockSnapshot.get('onHand') : null
-          if (typeof onHand !== 'number' || !Number.isFinite(onHand) || onHand < entry.quantity) {
+          const known = typeof onHand === 'number' && Number.isFinite(onHand)
+          const short = !known || onHand < entry.quantity
+          // Penjualan yang dicatat saat offline tidak ditolak karena stok; stok minus ditandai untuk dicek.
+          if (short && !offlineInfo) {
             throw new HttpsError(
               'failed-precondition',
-              `Stok ${product.name} tidak cukup (tersisa ${typeof onHand === 'number' ? onHand : 0} ${unit}).`,
+              `Stok ${product.name} tidak cukup (tersisa ${known ? onHand : 0} ${unit}).`,
             )
           }
-          return { entry, product, unit, onHand, total: Math.round(b2bPrice * entry.quantity) }
+          return { entry, product, unit, onHand: known ? onHand : 0, short, total: Math.round(b2bPrice * entry.quantity) }
         }),
       )
 
@@ -1539,7 +1576,7 @@ export const createB2bSale = onCall(
         total: lineTotal,
       }))
 
-      for (const { entry, product, unit, onHand } of resolved) {
+      for (const { entry, product, unit, onHand, short } of resolved) {
         const newOnHand = Math.round((onHand - entry.quantity) * 1000) / 1000
         transaction.set(entry.inventoryRef, {
           sku: product.sku,
@@ -1555,7 +1592,7 @@ export const createB2bSale = onCall(
           previousOnHand: onHand,
           newOnHand,
           quantityDelta: -entry.quantity,
-          reason: `Penjualan B2B ${receiptNo}`,
+          reason: `Penjualan B2B ${receiptNo}${short ? ' (offline, stok minus)' : ''}`,
           actorUid: request.auth!.uid,
           createdAt: FieldValue.serverTimestamp(),
         })
@@ -1583,7 +1620,16 @@ export const createB2bSale = onCall(
         cashierUid: request.auth!.uid,
         cashierName: staff.displayName,
         shiftId,
-        createdAtIso: new Date().toISOString(),
+        createdAtIso: offlineInfo ? new Date(offlineInfo.soldAtMs).toISOString() : new Date().toISOString(),
+        ...(offlineInfo
+          ? {
+              offline: true,
+              offlineReceiptNo: offlineInfo.draftReceiptNo,
+              stockFlags: resolved
+                .filter((row) => row.short)
+                .map((row) => ({ sku: row.product.sku as string, quantity: row.entry.quantity, onHandBefore: row.onHand })),
+            }
+          : {}),
       }
       transaction.create(saleRef, { ...sale, createdAt: FieldValue.serverTimestamp() })
       recordShiftSale(transaction, shiftId, 'b2b', paymentMethod as string, total, 1)

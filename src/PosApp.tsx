@@ -36,6 +36,9 @@ import StaffOnline, { useOnlineStaff, usePresence } from './StaffOnline'
 import MarketplaceTiktok from './MarketplaceTiktok'
 import OpsToasts from './OpsToasts'
 import { pushToast, setOps, useOps } from './opsStore'
+import OfflineSalesStatus from './OfflineSalesStatus'
+import { cacheSession, isNetworkError, loadCachedSession, sellOrQueue } from './offlineSales'
+import type { SaleDraft } from './offlineSales'
 import MarketplaceShopee from './MarketplaceShopee'
 import RetailMembers from './RetailMembers'
 import { useMemberData } from './memberData'
@@ -107,6 +110,14 @@ const posNavigation = [
 type InventoryItem = {
   onHand: number
   unit: string
+}
+
+// Tulis Firestore saat offline tidak pernah selesai sebelum tersambung; tulisan tetap antre di perangkat,
+// jadi layar tidak boleh menunggunya.
+function settleWrite<T>(write: Promise<T>): Promise<unknown> {
+  if (navigator.onLine) return write
+  write.catch(() => undefined)
+  return Promise.resolve()
 }
 
 type ProfileStatus = 'loading' | 'ready' | 'missing' | 'error'
@@ -1066,14 +1077,21 @@ function PosApp() {
         if (active) {
           setSessionDisplayName(data.displayName)
           setPasswordChangeRequired(data.forcePasswordChange)
+          if (!data.forcePasswordChange) cacheSession(user.uid, data.displayName)
         }
       },
       (error: unknown) => {
-        if (active) {
-          setProfileError(error instanceof Error ? error.message : 'Akses staf gagal diperiksa.')
-          setProfileStatus('error')
+        if (!active) return
+        // Tanpa internet: pakai sesi terakhir yang sudah diverifikasi server di perangkat ini.
+        const cached = isNetworkError(error) ? loadCachedSession(user.uid) : null
+        if (cached) {
+          setSessionDisplayName(cached.displayName)
           setPasswordChangeRequired(false)
+          return
         }
+        setProfileError(error instanceof Error ? error.message : 'Akses staf gagal diperiksa.')
+        setProfileStatus('error')
+        setPasswordChangeRequired(false)
       },
     )
     return () => {
@@ -1309,12 +1327,18 @@ function PosApp() {
     }
   }
 
-  async function createRetailSale(request: SaleRequest): Promise<SaleReceipt> {
-    const sell = httpsCallable<SaleRequest, SaleReceipt>(functions, 'createRetailSale')
-    const receipt = (await sell(request)).data
+  async function createRetailSale(request: SaleRequest, draft: SaleDraft): Promise<SaleReceipt> {
+    const receipt = await sellOrQueue<SaleReceipt>({
+      kind: 'retail',
+      callable: 'createRetailSale',
+      uid: user!.uid,
+      cashierName: profile?.displayName ?? '',
+      request,
+      draft,
+    })
     if (resumed) {
       try {
-        await deleteDoc(doc(database, 'pendingOrders', resumed.id))
+        await settleWrite(deleteDoc(doc(database, 'pendingOrders', resumed.id)))
       } catch {
         setDataError('Transaksi tersimpan, tetapi pending order lama gagal dihapus. Hapus manual di panel Pending Order.')
       }
@@ -1332,19 +1356,19 @@ function PosApp() {
       items: cart.map(({ sku, mode, input }) => ({ sku, mode, input })),
     }
     if (resumed) {
-      await updateDoc(doc(database, 'pendingOrders', resumed.id), {
+      await settleWrite(updateDoc(doc(database, 'pendingOrders', resumed.id), {
         ...payload,
         label: label || resumed.label,
         updatedAt: serverTimestamp(),
-      })
+      }))
     } else {
-      await addDoc(collection(database, 'pendingOrders'), {
+      await settleWrite(addDoc(collection(database, 'pendingOrders'), {
         ...payload,
         createdBy: user.uid,
         createdByName: profile?.displayName ?? '',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      })
+      }))
     }
     setCart([])
     setWaPhone('')
@@ -1365,12 +1389,18 @@ function PosApp() {
     selectPanel('retail')
   }
 
-  async function createB2bSale(request: B2bSaleRequest): Promise<B2bReceipt> {
-    const sell = httpsCallable<B2bSaleRequest, B2bReceipt>(functions, 'createB2bSale')
-    const receipt = (await sell(request)).data
+  async function createB2bSale(request: B2bSaleRequest, draft: SaleDraft): Promise<B2bReceipt> {
+    const receipt = await sellOrQueue<B2bReceipt>({
+      kind: 'b2b',
+      callable: 'createB2bSale',
+      uid: user!.uid,
+      cashierName: profile?.displayName ?? '',
+      request,
+      draft,
+    })
     if (resumedB2b) {
       try {
-        await deleteDoc(doc(database, 'pendingOrders', resumedB2b.id))
+        await settleWrite(deleteDoc(doc(database, 'pendingOrders', resumedB2b.id)))
       } catch {
         setDataError('Transaksi tersimpan, tetapi pending order lama gagal dihapus. Hapus manual di panel Pending Order.')
       }
@@ -1389,18 +1419,18 @@ function PosApp() {
       items: b2bCart.map(({ sku, mode, input }) => ({ sku, mode, input })),
     }
     if (resumedB2b) {
-      await updateDoc(doc(database, 'pendingOrders', resumedB2b.id), {
+      await settleWrite(updateDoc(doc(database, 'pendingOrders', resumedB2b.id), {
         ...payload,
         updatedAt: serverTimestamp(),
-      })
+      }))
     } else {
-      await addDoc(collection(database, 'pendingOrders'), {
+      await settleWrite(addDoc(collection(database, 'pendingOrders'), {
         ...payload,
         createdBy: user.uid,
         createdByName: profile?.displayName ?? '',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      })
+      }))
     }
     setB2bCart([])
     setB2bPhone('')
@@ -1420,7 +1450,7 @@ function PosApp() {
   async function deletePending(order: PendingOrder) {
     setPendingBusyId(order.id)
     try {
-      await deleteDoc(doc(database, 'pendingOrders', order.id))
+      await settleWrite(deleteDoc(doc(database, 'pendingOrders', order.id)))
       if (resumed?.id === order.id) setResumed(null)
       if (resumedB2b?.id === order.id) setResumedB2b(null)
     } catch (error) {
@@ -1513,6 +1543,7 @@ function PosApp() {
           <p className="pos-eyebrow">AKSES POS</p>
           <h1>Akses belum dapat diperiksa.</h1>
           <p role="alert">{profileError}</p>
+          <button type="button" onClick={() => window.location.reload()}>Coba lagi</button>
           <button type="button" onClick={() => void signOut(auth)}>Keluar</button>
         </section>
       </main>
@@ -1920,6 +1951,7 @@ function PosApp() {
       </div>
       <ShopeeWatcher />
       <ShopeeWatcher store="freshstock" />
+      <OfflineSalesStatus uid={user.uid} />
       <OpsToasts />
       <YubiCalculator />
     </main>

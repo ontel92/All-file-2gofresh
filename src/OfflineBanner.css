@@ -1,0 +1,1 @@
+.pos-offline-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 10000; padding: calc(0.45rem + env(safe-area-inset-top)) 0.9rem 0.45rem; background: #b71c1c; color: #fff; font-size: 0.85rem; font-weight: 600; text-align: center; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); }
