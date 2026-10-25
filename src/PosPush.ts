@@ -11,14 +11,14 @@ import type { ToastAction } from './opsStore'
 let registeredToken = ''
 
 const notificationChannels = [
-  { id: 'pos-web-orders', name: 'Pesanan Website', sound: 'order_masuk' },
-  { id: 'pos-live-chats', name: 'Chat Website', sound: 'chatmasuk' },
-  { id: 'pos-2gofresh-orders', name: 'Pesanan Shopee 2goFresh', sound: 'orderanmasuk_2gofresh' },
-  { id: 'pos-2gofresh-chats', name: 'Chat Shopee 2goFresh', sound: 'chatmasuk_2gofresh' },
-  { id: 'pos-2gofresh-shipping', name: 'Batas Kirim 2goFresh', sound: 'kurang10menit_2gofresh' },
-  { id: 'pos-freshstock-orders', name: 'Pesanan Shopee Freshstock', sound: 'orderanmasuk_freshstock' },
-  { id: 'pos-freshstock-chats', name: 'Chat Shopee Freshstock', sound: 'chatmasuk_freshstock' },
-  { id: 'pos-freshstock-shipping', name: 'Batas Kirim Freshstock', sound: 'kurang10menit_freshstock' },
+  { id: 'pos-web-orders-v2', name: 'Pesanan Website', sound: 'order_masuk' },
+  { id: 'pos-live-chats-v2', name: 'Chat Website', sound: 'chatmasuk' },
+  { id: 'pos-2gofresh-orders-v2', name: 'Pesanan Shopee 2goFresh', sound: 'orderanmasuk_2gofresh' },
+  { id: 'pos-2gofresh-chats-v2', name: 'Chat Shopee 2goFresh', sound: 'chatmasuk_2gofresh' },
+  { id: 'pos-2gofresh-shipping-v2', name: 'Batas Kirim 2goFresh', sound: 'kurang10menit_2gofresh' },
+  { id: 'pos-freshstock-orders-v2', name: 'Pesanan Shopee Freshstock', sound: 'orderanmasuk_freshstock' },
+  { id: 'pos-freshstock-chats-v2', name: 'Chat Shopee Freshstock', sound: 'chatmasuk_freshstock' },
+  { id: 'pos-freshstock-shipping-v2', name: 'Batas Kirim Freshstock', sound: 'kurang10menit_freshstock' },
 ] as const
 
 function actionFromData(value: unknown): ToastAction | null {

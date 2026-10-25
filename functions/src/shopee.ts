@@ -1919,7 +1919,7 @@ export const notifyShopeePushEvents = onSchedule(
                 await sendPosPush({
                   title: `Pesanan Shopee baru · ${storeName}`,
                   body: `${order.orderSn} · ${order.buyer || 'Pembeli'}`,
-                  channelId: store === 'freshstock' ? 'pos-freshstock-orders' : 'pos-2gofresh-orders',
+                  channelId: store === 'freshstock' ? 'pos-freshstock-orders-v2' : 'pos-2gofresh-orders-v2',
                   data: { panel: 'marketplace', kind: 'shopee-order', store, orderSn: order.orderSn },
                 })
                 knownOrderSet.add(order.orderSn)
@@ -1936,7 +1936,7 @@ export const notifyShopeePushEvents = onSchedule(
                 await sendPosPush({
                   title: `Batas kirim kurang dari 10 menit · ${storeName}`,
                   body: `${order.orderSn} · ${order.buyer || 'Pembeli'}`,
-                  channelId: store === 'freshstock' ? 'pos-freshstock-shipping' : 'pos-2gofresh-shipping',
+                  channelId: store === 'freshstock' ? 'pos-freshstock-shipping-v2' : 'pos-2gofresh-shipping-v2',
                   data: { panel: 'marketplace', kind: 'shopee-shipping-alert', store, orderSn: order.orderSn },
                 })
                 knownUrgent.add(order.orderSn)
@@ -1948,7 +1948,7 @@ export const notifyShopeePushEvents = onSchedule(
               await sendPosPush({
                 title: `Chat Shopee baru · ${storeName}`,
                 body: `${chat.buyer || 'Pembeli'}: ${chat.message}`,
-                channelId: store === 'freshstock' ? 'pos-freshstock-chats' : 'pos-2gofresh-chats',
+                channelId: store === 'freshstock' ? 'pos-freshstock-chats-v2' : 'pos-2gofresh-chats-v2',
                 data: { panel: 'chat', kind: 'shopee-chat', store },
               })
             }
