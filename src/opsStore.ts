@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { Capacitor } from '@capacitor/core'
 
 export type ShopeeStoreId = '2gofresh' | 'freshstock'
 export type ToastAction = { label: string; panel: string; orderSn?: string; store?: ShopeeStoreId }
@@ -94,6 +95,7 @@ function soundFor(src: string) {
 }
 
 export function playSound(src: string) {
+  if (Capacitor.getPlatform() === 'android') return
   const audio = soundFor(src)
   audio.pause()
   audio.currentTime = 0

@@ -8,6 +8,7 @@ import { onSchedule } from 'firebase-functions/v2/scheduler'
 import { HttpsError, onCall, onRequest, type CallableRequest } from 'firebase-functions/v2/https'
 import { google } from 'googleapis'
 import { shopeeMarginMappings } from './shopeeMarginMappings'
+import { sendPosPush } from './pushNotifications'
 
 const shopeeOptions = {
   region: 'asia-southeast2',
@@ -55,6 +56,7 @@ const authDoc = () => getFirestore().collection('shopeeAuth').doc(currentStore()
 type ShopeeAuth = { shopId: number; accessToken: string; refreshToken: string; expiresAt: number }
 type Json = Record<string, unknown>
 type Role = 'owner' | 'supervisor' | 'cashier'
+const shopeePushAlarmWindowMs = 10 * 60 * 1000
 
 function sign(base: string) {
   return createHmac('sha256', activePartnerKey()).update(base).digest('hex')
@@ -1818,6 +1820,156 @@ async function fetchConversations(type: 'all' | 'unread') {
   }
   return all
 }
+
+async function fetchReadyToShipForPush() {
+  const now = Math.floor(Date.now() / 1000)
+  const result = obj((await shopCall('/api/v2/order/get_order_list', {
+    time_range_field: 'create_time',
+    time_from: now - 14 * 24 * 3600,
+    time_to: now,
+    order_status: 'READY_TO_SHIP',
+    page_size: 30,
+  })).response)
+  const orderSns = list(result.order_list)
+    .map((order) => String(order.order_sn ?? ''))
+    .filter(Boolean)
+  if (orderSns.length === 0) return []
+
+  const detail = await shopCall('/api/v2/order/get_order_detail', {
+    order_sn_list: orderSns.join(','),
+    response_optional_fields: 'buyer_username,ship_by_date,order_status',
+  })
+  return list(obj(detail.response).order_list).map((order) => ({
+    orderSn: String(order.order_sn ?? ''),
+    buyer: String(order.buyer_username ?? ''),
+    shipBy: Number(order.ship_by_date ?? 0) * 1000,
+  })).filter((order) => order.orderSn)
+}
+
+async function fetchUnreadBuyerChatsForPush() {
+  let conversations: Json[]
+  try {
+    conversations = await fetchConversations('unread')
+  } catch (error) {
+    logger.warn('Shopee unread chat notification polling fell back to all conversations.', { error })
+    conversations = await fetchConversations('all')
+  }
+  return conversations
+    .filter((entry) => Number(entry.unread_count ?? 0) > 0)
+    .filter((entry) => Number(entry.latest_message_from_id ?? 0) === Number(entry.to_id ?? -1))
+    .map((entry) => ({
+      id: String(entry.conversation_id ?? ''),
+      latestId: String(entry.latest_message_id ?? ''),
+      buyer: String(entry.to_name ?? ''),
+      message: String(obj(entry.latest_message_content).text ?? ''),
+    }))
+    .filter((chat) => chat.id && chat.latestId)
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
+}
+
+function stringRecord(value: unknown): Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  )
+}
+
+const shopeePushSecrets = [
+  partnerIdSecret,
+  partnerKeySecret,
+  freshstockPartnerIdSecret,
+  freshstockPartnerKeySecret,
+]
+
+export const notifyShopeePushEvents = onSchedule(
+  {
+    region: 'asia-southeast2',
+    schedule: 'every 1 minutes',
+    timeZone: 'Asia/Jakarta',
+    memory: '512MiB',
+    timeoutSeconds: 120,
+    maxInstances: 1,
+    secrets: shopeePushSecrets,
+  },
+  async () => {
+    for (const store of ['2gofresh', 'freshstock'] as const) {
+      await storeContext.run(store, async () => {
+        try {
+          if (!(await authDoc().get()).exists) return
+
+          const [orders, chats] = await Promise.all([
+            fetchReadyToShipForPush(),
+            fetchUnreadBuyerChatsForPush(),
+          ])
+          const stateRef = getFirestore().collection('posPushState').doc(`shopee_${store}`)
+          const state = (await stateRef.get()).data() ?? {}
+          const initialized = state.initialized === true
+          const knownOrders = stringArray(state.orderSns)
+          const knownOrderSet = new Set(knownOrders)
+          const knownChats = stringRecord(state.chatLatest)
+          const knownUrgent = new Set(stringArray(state.urgentOrderSns))
+          const storeName = store === 'freshstock' ? 'Freshstock' : '2goFresh'
+
+          if (initialized) {
+            for (const order of orders) {
+              if (!knownOrderSet.has(order.orderSn)) {
+                await sendPosPush({
+                  title: `Pesanan Shopee baru · ${storeName}`,
+                  body: `${order.orderSn} · ${order.buyer || 'Pembeli'}`,
+                  channelId: store === 'freshstock' ? 'pos-freshstock-orders' : 'pos-2gofresh-orders',
+                  data: { panel: 'marketplace', kind: 'shopee-order', store, orderSn: order.orderSn },
+                })
+                knownOrderSet.add(order.orderSn)
+              }
+            }
+
+            const now = Date.now()
+            for (const order of orders) {
+              if (
+                order.shipBy > now &&
+                order.shipBy - now <= shopeePushAlarmWindowMs &&
+                !knownUrgent.has(order.orderSn)
+              ) {
+                await sendPosPush({
+                  title: `Batas kirim kurang dari 10 menit · ${storeName}`,
+                  body: `${order.orderSn} · ${order.buyer || 'Pembeli'}`,
+                  channelId: store === 'freshstock' ? 'pos-freshstock-shipping' : 'pos-2gofresh-shipping',
+                  data: { panel: 'marketplace', kind: 'shopee-shipping-alert', store, orderSn: order.orderSn },
+                })
+                knownUrgent.add(order.orderSn)
+              }
+            }
+
+            for (const chat of chats) {
+              if (knownChats[chat.id] === chat.latestId) continue
+              await sendPosPush({
+                title: `Chat Shopee baru · ${storeName}`,
+                body: `${chat.buyer || 'Pembeli'}: ${chat.message}`,
+                channelId: store === 'freshstock' ? 'pos-freshstock-chats' : 'pos-2gofresh-chats',
+                data: { panel: 'chat', kind: 'shopee-chat', store },
+              })
+            }
+          }
+
+          const latestChats = { ...knownChats }
+          for (const chat of chats) latestChats[chat.id] = chat.latestId
+          await stateRef.set({
+            initialized: true,
+            orderSns: [...new Set([...knownOrders, ...orders.map((order) => order.orderSn)])].slice(-500),
+            chatLatest: Object.fromEntries(Object.entries(latestChats).slice(-500)),
+            urgentOrderSns: [...knownUrgent].slice(-500),
+            updatedAt: FieldValue.serverTimestamp(),
+          })
+        } catch (error) {
+          logger.error('Shopee push notification polling failed.', { store, error })
+        }
+      })
+    }
+  },
+)
 
 // `unreadOnly` dipakai pengawas notifikasi: hanya percakapan yang belum dibaca di Shopee (termasuk yang sudah dibaca di Seller Center = hilang).
 export const shopeeChats = storeCall(storeOptions, async (request) => {

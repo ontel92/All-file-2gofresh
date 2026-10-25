@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   onAuthStateChanged,
   sendPasswordResetEmail,
@@ -46,6 +46,7 @@ import WebOrders, { useWebOrders } from './WebOrders'
 import { ClosedScreen, ClosingPanel, ExpensesPanel, OpenShiftGate, ShiftBlocked, useShift } from './Shifts'
 import type { CloseSummary } from './Shifts'
 import { usePrinter } from './printer'
+import { unregisterCurrentPosPushToken, usePosPush } from './PosPush'
 import type { PendingOrder } from './PendingOrders'
 import RetailCashier from './RetailCashier'
 import type { SaleReceipt, SaleRequest } from './RetailCashier'
@@ -971,6 +972,15 @@ function PosApp() {
   const [closedSummary, setClosedSummary] = useState<CloseSummary | null>(null)
   const shiftData = useShift(profileStatus === 'ready' && passwordChangeRequired === false)
   const dataReady = profileStatus === 'ready' && passwordChangeRequired === false
+  const signOutFromPos = useCallback(async () => {
+    try {
+      await unregisterCurrentPosPushToken()
+    } catch (error) {
+      console.error('Gagal menghapus perangkat dari daftar notifikasi sebelum keluar.', error)
+    }
+    await signOut(auth)
+  }, [])
+  usePosPush(user?.uid, dataReady)
   const memberData = useMemberData(dataReady)
   const webOrderData = useWebOrders(dataReady)
   const chatData = useStoreChats(dataReady)
@@ -1027,12 +1037,12 @@ function PosApp() {
       const timer = window.setTimeout(() => {
         if (!closedHereRef.current && ownedShiftRef.current) {
           ownedShiftRef.current = ''
-          void signOut(auth)
+          void signOutFromPos()
         }
       }, 4000)
       return () => window.clearTimeout(timer)
     }
-  }, [shiftData.state, user])
+  }, [shiftData.state, user, signOutFromPos])
   const printer = usePrinter()
   const [printerPanelOpen, setPrinterPanelOpen] = useState(false)
 
@@ -1544,7 +1554,7 @@ function PosApp() {
           <h1>Akses belum dapat diperiksa.</h1>
           <p role="alert">{profileError}</p>
           <button type="button" onClick={() => window.location.reload()}>Coba lagi</button>
-          <button type="button" onClick={() => void signOut(auth)}>Keluar</button>
+          <button type="button" onClick={() => void signOutFromPos()}>Keluar</button>
         </section>
       </main>
     )
@@ -1564,7 +1574,7 @@ function PosApp() {
             Di Firestore Console, buat dokumen <code>staff/{user.uid}</code> dengan
             `role` owner, supervisor, atau cashier dan `active` true.
           </p>
-          <button type="button" onClick={() => void signOut(auth)}>Keluar</button>
+          <button type="button" onClick={() => void signOutFromPos()}>Keluar</button>
         </section>
       </main>
     )
@@ -1657,7 +1667,7 @@ function PosApp() {
           >
             ▣ {printer.status === 'connected' ? printer.name : 'Printer terputus'}
           </button>
-          <button type="button" className="pos-logout" onClick={() => void signOut(auth)}>Keluar</button>
+          <button type="button" className="pos-logout" onClick={() => void signOutFromPos()}>Keluar</button>
         </div>
       </header>
 

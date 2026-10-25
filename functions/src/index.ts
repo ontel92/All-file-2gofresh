@@ -17,6 +17,7 @@ import { buildShiftReport, reportSmtpPass, reportSmtpUser, sendShiftReportEmail 
 
 export * from './webstore'
 export * from './shopee'
+export * from './pushNotifications'
 
 const shiftCallableOptions = {
   region: 'asia-southeast2',

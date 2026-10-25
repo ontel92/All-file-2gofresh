@@ -1,0 +1,40 @@
+{
+  "project_info": {
+    "project_number": "164090712378",
+    "firebase_url": "https://gofresh-3f2f3-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "gofresh-3f2f3",
+    "storage_bucket": "gofresh-3f2f3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:164090712378:android:95073d44dbd382c0128003",
+        "android_client_info": {
+          "package_name": "com.twogofresh.pos"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "164090712378-ee1vgdijppoubf44239l7h2uvn21aumc.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAbAu1_AUPahu2mHPEHtPnNgYCQnaoUHjA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "164090712378-ee1vgdijppoubf44239l7h2uvn21aumc.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

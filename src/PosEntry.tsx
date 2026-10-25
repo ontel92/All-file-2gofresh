@@ -1,10 +1,13 @@
 import { lazy, Suspense } from 'react'
 import OfflineBanner from './OfflineBanner'
+import { usePosNotificationActions } from './PosPush'
 import './OfflineBanner.css'
 
 const PosApp = lazy(() => import('./PosApp'))
 
 function PosEntry() {
+  usePosNotificationActions()
+
   return (
     <>
       <OfflineBanner />
