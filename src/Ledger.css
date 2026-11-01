@@ -1,0 +1,25 @@
+.lg { display: grid; gap: 16px; }
+.lg h2 { margin: 8px 0 0; font-size: 1rem; }
+.lg-toolbar { display: flex; flex-wrap: wrap; gap: 12px; }
+.lg label { display: grid; gap: 4px; font-size: 0.85rem; font-weight: 600; }
+.lg input, .lg select { padding: 8px 10px; border: 1px solid #d0d5dd; border-radius: 8px; font: inherit; }
+.lg-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.lg-card { display: grid; gap: 4px; padding: 14px; border-radius: 12px; border: 1px solid #e4e7ec; background: #fff; }
+.lg-card b { font-size: 1.3rem; }
+.lg-card small { color: #667085; }
+.lg-card.in b { color: #067647; }
+.lg-card.out b { color: #b42318; }
+.lg-grid { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 20px; align-items: start; }
+.lg-form { display: grid; gap: 10px; padding: 14px; border: 1px solid #e4e7ec; border-radius: 12px; background: #fff; }
+.lg-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.lg-seg button { padding: 8px; border: 1px solid #d0d5dd; border-radius: 8px; background: #fff; cursor: pointer; font: inherit; }
+.lg-seg button.on { background: #101828; color: #fff; border-color: #101828; }
+.lg-hint { margin: 0; color: #667085; font-size: 0.8rem; }
+.lg-table { width: 100%; border-collapse: collapse; background: #fff; font-size: 0.9rem; }
+.lg-table th, .lg-table td { padding: 8px 10px; border-bottom: 1px solid #eaecf0; text-align: left; }
+.lg-table td.income, .lg-table td.in { color: #067647; }
+.lg-table td.expense, .lg-table td.out { color: #b42318; }
+.lg-empty { text-align: center !important; color: #667085; }
+.lg-error { color: #b42318; margin: 0; }
+.lg-warning { color: #93370d; margin: 0; }
+@media (max-width: 800px) { .lg-grid { grid-template-columns: 1fr; } .lg { overflow-x: auto; } }

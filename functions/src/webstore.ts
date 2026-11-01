@@ -780,9 +780,22 @@ export const checkMidtransPayment = onCall(
         await applyMidtransStatus(orderRef, await response.json())
       }
     }
+    const latest = await orderRef.get()
+    const items = (latest.get('items') as OrderItem[] | undefined) ?? []
     return {
-      paymentStatus: (await orderRef.get()).get('paymentStatus') as string,
-      status: (await orderRef.get()).get('status') as string,
+      paymentStatus: latest.get('paymentStatus') as string,
+      status: latest.get('status') as string,
+      receipt: {
+        orderNo: String(latest.get('orderNo') ?? ''),
+        total: Number(latest.get('total') ?? 0),
+        subtotal: Number(latest.get('subtotal') ?? 0),
+        shippingFee: Number(latest.get('shippingFee') ?? 0),
+        pointsUsed: Number(latest.get('pointsUsed') ?? 0),
+        fulfillment: String(latest.get('fulfillment') ?? ''),
+        customerName: String(latest.get('customerName') ?? ''),
+        address: String(latest.get('address') ?? ''),
+        items: items.map((item) => ({ name: item.name, quantity: item.quantity, unit: item.unit, total: item.total })),
+      },
     }
   },
 )

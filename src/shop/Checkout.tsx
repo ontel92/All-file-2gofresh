@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { signInAnonymously } from 'firebase/auth'
 import { getStorage, ref, uploadBytes } from 'firebase/storage'
 import { httpsCallable } from 'firebase/functions'
@@ -10,6 +10,8 @@ import { storeInfo } from '../storeInfo'
 import { currency, qtyFormat } from './customer'
 import type { CartMap, CustomerProfile, Product } from './customer'
 import MapPicker from './MapPicker'
+import { receiptWhatsappUrl } from './OrderThanks'
+import type { Receipt } from './OrderThanks'
 import type { Point } from './MapPicker'
 
 type Props = {
@@ -23,18 +25,30 @@ type Props = {
   onPaymentStarted: (payment: { orderId: string; orderNo: string; redirectUrl: string }) => void
 }
 
-type Done = { orderNo: string; total: number; payment: 'midtrans' | 'qris' }
+type Done = { orderNo: string; total: number; payment: 'midtrans' | 'qris'; receipt: Receipt }
+type Draft = { name?: string; phone?: string; email?: string; fulfillment?: 'delivery' | 'pickup'; point?: Point | null; address?: string; note?: string }
+
+const draftKey = '2gofresh-checkout-draft'
+
+function loadDraft(): Draft {
+  try {
+    return JSON.parse(localStorage.getItem(draftKey) ?? '{}') as Draft
+  } catch {
+    return {}
+  }
+}
 
 function Checkout({ products, cart, registered, profile, onClose, onNeedLogin, onDone, onPaymentStarted }: Props) {
-  const [name, setName] = useState(profile?.name ?? '')
-  const [phone, setPhone] = useState(profile?.phone ?? '')
-  const [email, setEmail] = useState(profile?.email ?? '')
-  const [fulfillment, setFulfillment] = useState<'delivery' | 'pickup'>('delivery')
+  const [draft] = useState(loadDraft)
+  const [name, setName] = useState(draft.name || profile?.name || '')
+  const [phone, setPhone] = useState(draft.phone || profile?.phone || '')
+  const [email, setEmail] = useState(draft.email || profile?.email || '')
+  const [fulfillment, setFulfillment] = useState<'delivery' | 'pickup'>(draft.fulfillment ?? 'delivery')
   const [point, setPoint] = useState<Point | null>(
-    profile && profile.lat !== null && profile.lng !== null ? { lat: profile.lat, lng: profile.lng } : null,
+    draft.point ?? (profile && profile.lat !== null && profile.lng !== null ? { lat: profile.lat, lng: profile.lng } : null),
   )
-  const [address, setAddress] = useState(profile?.address ?? '')
-  const [note, setNote] = useState('')
+  const [address, setAddress] = useState(draft.address || profile?.address || '')
+  const [note, setNote] = useState(draft.note ?? '')
   const [payment, setPayment] = useState<'midtrans' | 'qris'>('midtrans')
   const [proof, setProof] = useState<File | null>(null)
   const [usePoints, setUsePoints] = useState(0)
@@ -44,6 +58,9 @@ function Checkout({ products, cart, registered, profile, onClose, onNeedLogin, o
   const [requestId] = useState(() => crypto.randomUUID())
   const [guest, setGuest] = useState(false)
 
+  useEffect(() => {
+    localStorage.setItem(draftKey, JSON.stringify({ name, phone, email, fulfillment, point, address, note }))
+  }, [name, phone, email, fulfillment, point, address, note])
   const lines = useMemo(
     () =>
       Object.entries(cart)
@@ -118,6 +135,7 @@ function Checkout({ products, cart, registered, profile, onClose, onNeedLogin, o
         proofPath,
         usePoints: pointsUsed,
       })
+      localStorage.removeItem(draftKey)
       if (payment === 'midtrans') {
         const result = await httpsCallable<unknown, { redirectUrl: string }>(
           functions,
@@ -128,7 +146,22 @@ function Checkout({ products, cart, registered, profile, onClose, onNeedLogin, o
         return
       }
       onDone()
-      setDone({ orderNo: created.data.orderNo, total: created.data.total, payment })
+      setDone({
+        orderNo: created.data.orderNo,
+        total: created.data.total,
+        payment,
+        receipt: {
+          orderNo: created.data.orderNo,
+          total: created.data.total,
+          subtotal,
+          shippingFee: shipping?.fee ?? 0,
+          pointsUsed,
+          fulfillment,
+          customerName: name.trim(),
+          address: fulfillment === 'delivery' ? address.trim() : '',
+          items: lines.map((line) => ({ name: line.product.name, quantity: line.quantity, unit: line.product.unit, total: line.total })),
+        },
+      })
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Pesanan gagal dibuat. Coba lagi.')
     } finally {
@@ -146,7 +179,10 @@ function Checkout({ products, cart, registered, profile, onClose, onNeedLogin, o
           <p className="muted">
             Pembayaran {currency.format(done.total)} sedang kami cek. Kami akan memproses pesanan setelah pembayaran terverifikasi dan menghubungi Anda lewat WhatsApp.
           </p>
-          <button type="button" className="btn" onClick={onClose}>Selesai</button>
+          <div className="choice-stack">
+            <a className="btn" href={receiptWhatsappUrl(done.receipt, false)} target="_blank" rel="noreferrer">Tunjukkan struk ini ke admin kami</a>
+            <button type="button" className="btn ghost" onClick={onClose}>Belanja lagi</button>
+          </div>
         </div>
       </div>
     )

@@ -1,0 +1,30 @@
+.kulak { display: grid; gap: 12px; padding: 16px; max-width: 980px; }
+.kulak h2 { margin: 0; }
+.kulak p { margin: 4px 0; }
+.kulak textarea { width: 100%; box-sizing: border-box; padding: 10px; font: inherit; border: 1px solid #d6d3c4; border-radius: 8px; }
+.kulak-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.kulak-actions button, .kulak-actions input { padding: 10px 14px; border-radius: 8px; border: 1px solid #d6d3c4; background: #fff; font: inherit; }
+.kulak-actions .primary { background: #0f172a; color: #fff; border-color: #0f172a; font-weight: 700; }
+.kulak-actions button:disabled { opacity: 0.5; }
+.kulak-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+.kulak-summary div { background: #fff; border: 1px solid #e5e2d3; border-radius: 8px; padding: 10px; display: grid; gap: 2px; }
+.kulak-summary span { font-size: 12px; color: #666; }
+.kulak-table { overflow-x: auto; }
+.kulak-table table { width: 100%; border-collapse: collapse; background: #fff; }
+.kulak-table th, .kulak-table td { padding: 8px 10px; border-bottom: 1px solid #eee; text-align: left; }
+.kulak-table td:nth-child(4), .kulak-table th:nth-child(4) { text-align: right; }
+.kulak-extra td { color: #666; background: #faf9f2; }
+.kulak-table button { border: 0; background: transparent; cursor: pointer; color: #b91c1c; }
+.kulak-warn { color: #b45309; }
+.kulak-ok { color: #15803d; }
+.kulak-hpp { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid #e5e2d3; }
+.kulak-hpp h3 { margin: 0; }
+.kulak-hpp input[list] { width: 100%; min-width: 220px; padding: 6px 8px; border: 1px solid #d6d3c4; border-radius: 6px; font: inherit; box-sizing: border-box; }
+.kulak-missing { color: #b91c1c; font-weight: 600; }
+.kulak-extra input { width: 100%; padding: 6px 8px; border: 1px solid #d6d3c4; border-radius: 6px; font: inherit; box-sizing: border-box; background: #fff; }
+.kulak-extra .kulak-amount { text-align: right; max-width: 150px; }
+.kulak-table .kulak-move { color: #0f172a; border: 1px solid #d6d3c4; border-radius: 6px; padding: 2px 8px; margin-right: 6px; }
+.kulak-modal { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); display: grid; place-items: center; z-index: 50; padding: 16px; }
+.kulak-modal-card { background: #fff; border-radius: 12px; padding: 18px; width: min(900px, 100%); max-height: 85vh; overflow: auto; display: grid; gap: 10px; }
+.kulak-modal-card h3 { margin: 0; }
+.kulak-rugi td { background: #fef2f2; color: #b91c1c; }

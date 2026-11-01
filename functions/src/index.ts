@@ -10,13 +10,16 @@ import { FieldValue, getFirestore } from 'firebase-admin/firestore'
 import { getStorage } from 'firebase-admin/storage'
 import type { Transaction } from 'firebase-admin/firestore'
 import { logger } from 'firebase-functions'
-import { HttpsError, onCall } from 'firebase-functions/v2/https'
+import { HttpsError, onCall, type CallableRequest } from 'firebase-functions/v2/https'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 import { google } from 'googleapis'
 import { buildShiftReport, reportSmtpPass, reportSmtpUser, sendShiftReportEmail } from './shiftReport'
 
 export * from './webstore'
 export * from './shopee'
+export * from './tiktok'
+export * from './ledger'
+export * from './kulak'
 export * from './pushNotifications'
 
 const shiftCallableOptions = {
@@ -516,7 +519,6 @@ export const loginWithStaffId = onCall(
       !credentialSnapshot.exists ||
       !passwordMatches ||
       staff?.active !== true ||
-      staff.role !== 'cashier' ||
       credential?.forcePasswordChange !== true && credential?.forcePasswordChange !== false
     ) {
       await database.runTransaction(async (transaction) => {
@@ -560,7 +562,7 @@ export const getStaffSession = onCall(
       throw new HttpsError('unauthenticated', 'Silakan login ke POS terlebih dahulu.')
     }
     const staff = await requireStaffRole(request.auth.uid, ['owner', 'supervisor', 'cashier'])
-    if (staff.role !== 'cashier' || typeof staff.loginId !== 'string') {
+    if (typeof staff.loginId !== 'string') {
       return {
         displayName: staff.displayName ?? request.auth.token.email ?? 'Staf',
         forcePasswordChange: false,
@@ -593,7 +595,7 @@ export const changeStaffPassword = onCall(
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Silakan login ke POS terlebih dahulu.')
     }
-    const staff = await requireStaffRole(request.auth.uid, ['cashier'])
+    const staff = await requireStaffRole(request.auth.uid, ['owner', 'supervisor', 'cashier'])
     const input = callableData(request.data)
     if (!passwordValue(input.password)) {
       throw new HttpsError(
@@ -636,11 +638,11 @@ export const resetCashierPassword = onCall(
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Silakan login ke POS terlebih dahulu.')
     }
-    await requireStaffRole(request.auth.uid, ['owner', 'supervisor'])
+    const actor = await requireStaffRole(request.auth.uid, ['owner', 'supervisor'])
     const input = callableData(request.data)
     const loginId = normalizedLoginId(input.loginId)
     if (loginId === null) {
-      throw new HttpsError('invalid-argument', 'ID kasir tidak valid.')
+      throw new HttpsError('invalid-argument', 'ID anggota tidak valid.')
     }
 
     const database = getFirestore()
@@ -648,14 +650,17 @@ export const resetCashierPassword = onCall(
     const credentialSnapshot = await credentialRef.get()
     const oldUid = credentialSnapshot.get('uid')
     if (!credentialSnapshot.exists || typeof oldUid !== 'string') {
-      throw new HttpsError('not-found', 'Akun kasir tidak ditemukan.')
+      throw new HttpsError('not-found', 'Akun anggota tidak ditemukan.')
     }
     const oldStaffRef = database.collection('staff').doc(oldUid)
     const oldStaffSnapshot = await oldStaffRef.get()
     const oldStaff = oldStaffSnapshot.data() as StaffAccount | undefined
-    if (oldStaff?.role !== 'cashier') {
-      throw new HttpsError('permission-denied', 'Akun ini tidak dapat direset sebagai kasir.')
+    // Supervisor hanya boleh mereset kasir; owner mengendalikan semua anggota non-owner.
+    const resettableRoles: StaffRole[] = actor.role === 'owner' ? ['cashier', 'supervisor'] : ['cashier']
+    if (!oldStaff || !resettableRoles.includes(oldStaff.role)) {
+      throw new HttpsError('permission-denied', 'Akun ini tidak dapat Anda reset.')
     }
+    const staffRole = oldStaff.role
 
     const newPassword = temporaryPassword()
     const { salt, hash } = await hashPassword(newPassword)
@@ -666,7 +671,7 @@ export const resetCashierPassword = onCall(
       const currentStaff = await transaction.get(oldStaffRef)
       if (
         currentCredential.get('uid') !== oldUid ||
-        currentStaff.get('role') !== 'cashier'
+        currentStaff.get('role') !== staffRole
       ) {
         throw new HttpsError('aborted', 'Akun berubah saat reset. Silakan coba lagi.')
       }
@@ -674,7 +679,7 @@ export const resetCashierPassword = onCall(
       transaction.create(newStaffRef, {
         loginId,
         displayName: oldStaff.displayName ?? credentialSnapshot.get('displayName') ?? loginId,
-        role: 'cashier',
+        role: staffRole,
         active: oldStaff.active === true,
         createdAt: oldStaffSnapshot.get('createdAt') ?? FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
@@ -701,6 +706,184 @@ export const resetCashierPassword = onCall(
     }
   },
 )
+
+const staffAdminOptions = {
+  region: 'asia-southeast2',
+  memory: '512MiB',
+  maxInstances: 3,
+  serviceAccount: 'catalog-sync-runtime@gofresh-3f2f3.iam.gserviceaccount.com',
+} as const
+// Owner tidak dapat dibuat atau diubah dari panel agar akses pemilik tidak bisa hilang.
+const assignableStaffRoles: StaffRole[] = ['cashier', 'supervisor']
+
+function staffNameValue(value: unknown): string | null {
+  const name = typeof value === 'string' ? value.trim() : ''
+  return name.length >= 1 && name.length <= 60 ? name : null
+}
+
+function staffRoleValue(value: unknown): StaffRole | null {
+  return assignableStaffRoles.find((role) => role === value) ?? null
+}
+
+async function requireOwnerAdmin(request: CallableRequest) {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Silakan login sebagai owner.')
+  }
+  await requireStaffRole(request.auth.uid, ['owner'])
+  if (request.auth.token.forcePasswordChange === true) {
+    throw new HttpsError('failed-precondition', 'Ganti password sementara terlebih dahulu.')
+  }
+  return request.auth.uid
+}
+
+export const createStaffMember = onCall(staffAdminOptions, async (request) => {
+  const actorUid = await requireOwnerAdmin(request)
+  const input = callableData(request.data)
+  const displayName = staffNameValue(input.displayName)
+  const role = staffRoleValue(input.role)
+  if (displayName === null || role === null) {
+    throw new HttpsError('invalid-argument', 'Nama (maks. 60 karakter) dan peran supervisor/kasir wajib diisi.')
+  }
+  const rawEmail = typeof input.email === 'string' ? input.email.trim().toLowerCase() : ''
+  const rawLoginId = typeof input.loginId === 'string' ? input.loginId.trim() : ''
+  if ((rawEmail === '') === (rawLoginId === '')) {
+    throw new HttpsError('invalid-argument', 'Isi salah satu: email, atau ID login jika anggota tidak punya email.')
+  }
+
+  const database = getFirestore()
+  if (rawEmail !== '') {
+    if (rawEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
+      throw new HttpsError('invalid-argument', 'Format email tidak valid.')
+    }
+    let uid = ''
+    let password: string | null = null
+    try {
+      uid = (await getAuth().getUserByEmail(rawEmail)).uid
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'auth/user-not-found') throw error
+    }
+    if (uid === '') {
+      password = temporaryPassword()
+      uid = (await getAuth().createUser({ email: rawEmail, password, displayName })).uid
+    }
+    try {
+      await database.collection('staff').doc(uid).create({
+        email: rawEmail,
+        displayName,
+        role,
+        active: true,
+        createdAt: FieldValue.serverTimestamp(),
+        createdBy: actorUid,
+      })
+    } catch (error) {
+      if ((error as { code?: number }).code === 6) {
+        throw new HttpsError('already-exists', 'Email ini sudah terdaftar sebagai anggota.')
+      }
+      throw error
+    }
+    logger.info('Staff member created by email.', { actorUid, uid, role })
+    return { uid, role, displayName, email: rawEmail, loginId: null, temporaryPassword: password }
+  }
+
+  const loginId = normalizedLoginId(rawLoginId)
+  if (loginId === null) {
+    throw new HttpsError('invalid-argument', 'ID login 3–32 karakter: huruf kecil, angka, _ atau -.')
+  }
+  const password = temporaryPassword()
+  const { salt, hash } = await hashPassword(password)
+  const uid = `staff-${loginId}-${randomBytes(8).toString('hex')}`
+  const credentialRef = database.collection(credentialsCollection).doc(loginId)
+  await database.runTransaction(async (transaction) => {
+    if ((await transaction.get(credentialRef)).exists) {
+      throw new HttpsError('already-exists', 'ID login ini sudah dipakai.')
+    }
+    transaction.create(credentialRef, {
+      loginId,
+      displayName,
+      uid,
+      salt,
+      passwordHash: hash,
+      forcePasswordChange: true,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+    transaction.create(database.collection('staff').doc(uid), {
+      loginId,
+      displayName,
+      role,
+      active: true,
+      createdAt: FieldValue.serverTimestamp(),
+      createdBy: actorUid,
+    })
+  })
+  logger.info('Staff member created by login ID.', { actorUid, uid, loginId, role })
+  return { uid, role, displayName, email: null, loginId, temporaryPassword: password }
+})
+
+export const updateStaffMember = onCall(staffAdminOptions, async (request) => {
+  const actorUid = await requireOwnerAdmin(request)
+  const input = callableData(request.data)
+  const uid = typeof input.uid === 'string' && input.uid.length > 0 && input.uid.length <= 128 ? input.uid : null
+  if (uid === null) {
+    throw new HttpsError('invalid-argument', 'Anggota tidak valid.')
+  }
+  if (uid === actorUid) {
+    throw new HttpsError('permission-denied', 'Anda tidak dapat mengubah akun Anda sendiri.')
+  }
+
+  const updates: Record<string, unknown> = {}
+  if (input.role !== undefined) {
+    const role = staffRoleValue(input.role)
+    if (role === null) throw new HttpsError('invalid-argument', 'Peran harus supervisor atau kasir.')
+    updates.role = role
+  }
+  if (input.active !== undefined) {
+    if (typeof input.active !== 'boolean') throw new HttpsError('invalid-argument', 'Status aktif tidak valid.')
+    updates.active = input.active
+  }
+  if (input.displayName !== undefined) {
+    const displayName = staffNameValue(input.displayName)
+    if (displayName === null) throw new HttpsError('invalid-argument', 'Nama harus 1–60 karakter.')
+    updates.displayName = displayName
+  }
+  if (Object.keys(updates).length === 0) {
+    throw new HttpsError('invalid-argument', 'Tidak ada perubahan.')
+  }
+
+  const staffRef = getFirestore().collection('staff').doc(uid)
+  await getFirestore().runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(staffRef)
+    if (!snapshot.exists) {
+      throw new HttpsError('not-found', 'Anggota tidak ditemukan.')
+    }
+    if (staffRoleValue(snapshot.get('role')) === null) {
+      throw new HttpsError('permission-denied', 'Akun owner tidak dapat diubah dari panel.')
+    }
+    transaction.update(staffRef, { ...updates, updatedAt: FieldValue.serverTimestamp(), updatedBy: actorUid })
+  })
+  logger.info('Staff member updated.', { actorUid, uid, fields: Object.keys(updates) })
+  return { ok: true }
+})
+
+export const resetStaffEmailPassword = onCall(staffAdminOptions, async (request) => {
+  const actorUid = await requireOwnerAdmin(request)
+  const input = callableData(request.data)
+  const uid = typeof input.uid === 'string' && input.uid.length > 0 && input.uid.length <= 128 ? input.uid : null
+  if (uid === null || uid === actorUid) {
+    throw new HttpsError('invalid-argument', 'Anggota tidak valid.')
+  }
+  const staff = (await getFirestore().collection('staff').doc(uid).get()).data() as
+    | (StaffAccount & { email?: string })
+    | undefined
+  if (!staff || staffRoleValue(staff.role) === null || typeof staff.loginId === 'string') {
+    throw new HttpsError('failed-precondition', 'Hanya anggota berakun email (bukan owner) yang bisa direset di sini.')
+  }
+  const password = temporaryPassword()
+  await getAuth().updateUser(uid, { password })
+  await getAuth().revokeRefreshTokens(uid)
+  logger.info('Staff email password reset.', { actorUid, uid })
+  return { uid, email: staff.email ?? '', displayName: staff.displayName ?? '', temporaryPassword: password }
+})
 
 export const setOpeningStock = onCall(
   {
@@ -936,6 +1119,64 @@ export const setOpeningStockBatch = onCall(
       actorUid: request.auth.uid,
     })
     return { updatedCount: entries.length }
+  },
+)
+
+export const resetAllStock = onCall(
+  {
+    region: 'asia-southeast2',
+    memory: '512MiB',
+    maxInstances: 1,
+    serviceAccount: 'catalog-sync-runtime@gofresh-3f2f3.iam.gserviceaccount.com',
+    timeoutSeconds: 300,
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Silakan login ke POS terlebih dahulu.')
+    }
+    const actorUid = request.auth.uid
+    await requireStaffRole(actorUid, ['owner'])
+    if (request.auth.token.forcePasswordChange === true) {
+      throw new HttpsError('failed-precondition', 'Ganti password sementara terlebih dahulu.')
+    }
+    if (callableData(request.data).confirm !== 'RESET') {
+      throw new HttpsError('invalid-argument', 'Konfirmasi reset stok tidak valid.')
+    }
+
+    const database = getFirestore()
+    const snapshot = await database.collection('inventory').get()
+    const targets = snapshot.docs.filter((doc) => {
+      const onHand = doc.get('onHand')
+      return typeof onHand === 'number' && Number.isFinite(onHand) && onHand !== 0
+    })
+
+    // Setiap produk memakai 2 tulisan (stok + riwayat), batas satu batch 500 tulisan.
+    for (let start = 0; start < targets.length; start += 200) {
+      const batch = database.batch()
+      for (const doc of targets.slice(start, start + 200)) {
+        const previousOnHand = doc.get('onHand') as number
+        batch.update(doc.ref, {
+          onHand: 0,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedBy: actorUid,
+        })
+        batch.create(database.collection('stockMovements').doc(), {
+          sku: doc.get('sku') ?? doc.id,
+          unit: doc.get('unit') ?? '',
+          movementType: 'stock-reset',
+          previousOnHand,
+          newOnHand: 0,
+          quantityDelta: -previousOnHand,
+          reason: 'Reset semua stok oleh owner',
+          actorUid,
+          createdAt: FieldValue.serverTimestamp(),
+        })
+      }
+      await batch.commit()
+    }
+
+    logger.warn('All POS stock reset to zero.', { resetCount: targets.length, actorUid })
+    return { resetCount: targets.length }
   },
 )
 

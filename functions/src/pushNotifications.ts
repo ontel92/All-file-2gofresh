@@ -22,22 +22,28 @@ export type PosPushMessage = {
 type PosPushChannelId =
   | 'pos-web-orders-v2'
   | 'pos-live-chats-v2'
-  | 'pos-2gofresh-orders-v2'
-  | 'pos-2gofresh-chats-v2'
-  | 'pos-2gofresh-shipping-v2'
-  | 'pos-freshstock-orders-v2'
-  | 'pos-freshstock-chats-v2'
-  | 'pos-freshstock-shipping-v2'
+  | 'pos-2gofresh-orders-v3'
+  | 'pos-2gofresh-chats-v3'
+  | 'pos-2gofresh-shipping-v3'
+  | 'pos-freshstock-orders-v3'
+  | 'pos-freshstock-chats-v3'
+  | 'pos-freshstock-shipping-v3'
+  | 'pos-tiktok-orders-v3'
+  | 'pos-tiktok-chats-v3'
+  | 'pos-tiktok-shipping-v3'
 
 const notificationSounds: Record<PosPushChannelId, string> = {
   'pos-web-orders-v2': 'order_masuk',
   'pos-live-chats-v2': 'chatmasuk',
-  'pos-2gofresh-orders-v2': 'orderanmasuk_2gofresh',
-  'pos-2gofresh-chats-v2': 'chatmasuk_2gofresh',
-  'pos-2gofresh-shipping-v2': 'kurang10menit_2gofresh',
-  'pos-freshstock-orders-v2': 'orderanmasuk_freshstock',
-  'pos-freshstock-chats-v2': 'chatmasuk_freshstock',
-  'pos-freshstock-shipping-v2': 'kurang10menit_freshstock',
+  'pos-2gofresh-orders-v3': 'orderanmasuk_2gofresh',
+  'pos-2gofresh-chats-v3': 'chatmasuk_2gofresh',
+  'pos-2gofresh-shipping-v3': 'kurang12menit_2gofresh',
+  'pos-freshstock-orders-v3': 'orderanmasuk_freshstock',
+  'pos-freshstock-chats-v3': 'chatmasuk_freshstock',
+  'pos-freshstock-shipping-v3': 'kurang12menit_freshstock',
+  'pos-tiktok-orders-v3': 'orderanmasuk_tiktok',
+  'pos-tiktok-chats-v3': 'chatmasuk_tiktok',
+  'pos-tiktok-shipping-v3': 'kurang12menit_tiktok',
 }
 
 function tokenId(token: string) {

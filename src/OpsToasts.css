@@ -7,6 +7,8 @@
 .ops-toast-actions button { border: 1px solid #07775a; background: #07775a; color: #fff; border-radius: 6px; padding: 0.25rem 0.6rem; cursor: pointer; font-size: 0.8rem; }
 .ops-toast.store-2gofresh { border-left-color: #ee4d2d; }
 .ops-toast.store-2gofresh .ops-toast-actions button { border-color: #ee4d2d; background: #ee4d2d; }
+.ops-toast.store-tiktok { border-left-color: #111; }
+.ops-toast.store-tiktok .ops-toast-actions button { border-color: #111; background: #111; }
 .ops-toast.store-freshstock { border-left-color: #2e7d32; }
 .ops-toast.store-freshstock .ops-toast-actions button { border-color: #2e7d32; background: #2e7d32; }
 .ops-toast-tag { justify-self: start; font-style: normal; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; padding: 0.05rem 0.5rem; border-radius: 999px; background: #f1f1f1; color: #555; }

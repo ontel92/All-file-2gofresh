@@ -1,6 +1,6 @@
 // Service worker khusus aplikasi POS (kasir.2gofresh.com). Dipakai agar aplikasi bisa dibuka tanpa internet.
 // Data transaksi tetap diproses server; worker ini hanya menyimpan berkas aplikasi (HTML, JS, CSS, ikon, suara).
-const VERSION = 'pos-v1'
+const VERSION = 'pos-v2'
 const SHELL_CACHE = `${VERSION}-shell`
 const ASSET_CACHE = `${VERSION}-assets`
 const SHELL_FILES = [
@@ -12,8 +12,11 @@ const SHELL_FILES = [
   '/orderanmasuk_freshstock.mp3',
   '/chatmasuk_2gofresh.mp3',
   '/chatmasuk_freshstock.mp3',
-  '/kurang10menit_2gofresh.mp3',
-  '/kurang10menit_freshstock.mp3',
+  '/kurang12menit_2gofresh.mp3',
+  '/kurang12menit_freshstock.mp3',
+  '/orderanmasuk_tiktok.mp3',
+  '/chatmasuk_tiktok.mp3',
+  '/kurang12menit_tiktok.mp3',
   '/order_masuk.mp3',
   '/chatmasuk.mp3',
 ]

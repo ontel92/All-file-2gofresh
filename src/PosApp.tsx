@@ -30,6 +30,8 @@ import PendingOrders from './PendingOrders'
 import PrinterGate from './PrinterGate'
 import YubiCalculator from './YubiCalculator'
 import ShopeeWatcher from './ShopeeWatcher'
+import TiktokWatcher from './TiktokWatcher'
+import ShipAlarmPopup from './ShipAlarmPopup'
 import { useStoreChats } from './LiveChat'
 import AllChats from './AllChats'
 import StaffOnline, { useOnlineStaff, usePresence } from './StaffOnline'
@@ -40,6 +42,10 @@ import OfflineSalesStatus from './OfflineSalesStatus'
 import { cacheSession, isNetworkError, loadCachedSession, sellOrQueue } from './offlineSales'
 import type { SaleDraft } from './offlineSales'
 import MarketplaceShopee from './MarketplaceShopee'
+import MarketplaceSync from './MarketplaceSync'
+import MarketplaceHub from './MarketplaceHub'
+import Ledger from './Ledger'
+import Kulak from './Kulak'
 import RetailMembers from './RetailMembers'
 import { useMemberData } from './memberData'
 import WebOrders, { useWebOrders } from './WebOrders'
@@ -71,10 +77,43 @@ type StaffProfile = {
   loginId?: string
 }
 
+type StaffRoleName = 'owner' | 'supervisor' | 'cashier'
+
 type StaffMember = {
   uid: string
-  loginId: string
+  role: StaffRoleName
+  active: boolean
   displayName: string
+  loginId?: string
+  email?: string
+}
+
+type StaffCreateInput = {
+  displayName: string
+  role: 'supervisor' | 'cashier'
+  email?: string
+  loginId?: string
+}
+
+type StaffCreateResult = {
+  uid: string
+  displayName: string
+  email: string | null
+  loginId: string | null
+  temporaryPassword: string | null
+}
+
+type StaffUpdateInput = {
+  uid: string
+  role?: 'supervisor' | 'cashier'
+  active?: boolean
+  displayName?: string
+}
+
+const staffRoleLabels: Record<StaffRoleName, string> = {
+  owner: 'Owner',
+  supervisor: 'Supervisor',
+  cashier: 'Kasir',
 }
 
 type TemporaryCredential = {
@@ -94,6 +133,8 @@ const posNavigation = [
   { id: 'pending', label: 'Pending Order', icon: '⏳', group: 'KASIR', ready: true },
   { id: 'expenses', label: 'Pengeluaran Kas', icon: '🧾', group: 'KAS & SHIFT', ready: true },
   { id: 'closing', label: 'Closing Shift', icon: '📕', group: 'KAS & SHIFT', ready: true },
+  { id: 'ledger', label: 'Pembukuan', icon: '📒', group: 'KAS & SHIFT', ready: true },
+  { id: 'kulak', label: 'Catatan Kulak', icon: '🥬', group: 'KAS & SHIFT', ready: true },
   { id: 'monitor', label: 'Kasir Online', icon: '👩🏻‍💻', group: 'KAS & SHIFT', ready: true },
   { id: 'sales-history', label: 'Riwayat Penjualan', icon: '📜', group: 'LAPORAN & DATA', ready: true },
   { id: 'catalog', label: 'Katalog Produk', icon: '📒', group: 'LAPORAN & DATA', ready: true },
@@ -102,8 +143,10 @@ const posNavigation = [
   { id: 'b2b-members', label: 'Member B2B', icon: '🪪', group: 'MEMBER', ready: true },
   { id: 'retail-members', label: 'Member Retail', icon: '🎫', group: 'MEMBER', ready: true },
   { id: 'web-order', label: 'Web Order', icon: '🌐', group: 'ONLINE', ready: true },
+  { id: 'marketplace-hub', label: 'Pusat Marketplace', icon: '🧭', group: 'ONLINE', ready: true },
   { id: 'marketplace', label: 'Marketplace Shopee', icon: '🟧', group: 'ONLINE', ready: true },
   { id: 'marketplace-margin', label: 'Margin Marketplace', icon: '📈', group: 'ONLINE', ready: true },
+  { id: 'marketplace-sync', label: 'Sinkron Master Shopee', icon: '🔄', group: 'ONLINE', ready: true },
   { id: 'tiktok', label: 'Marketplace Tokopedia/TikTok', icon: 'ᕷ', group: 'ONLINE', ready: true },
   { id: 'chat', label: 'Semua Chat', icon: '🗫', group: 'ONLINE', ready: true },
 ] as const
@@ -444,74 +487,172 @@ function ChangeTemporaryPassword({
 
 function StaffAccountPanel({
   isOwner,
+  currentUid,
   staffMembers,
   onInitialize,
   onReset,
+  onCreate,
+  onUpdate,
+  onResetEmail,
 }: {
   isOwner: boolean
+  currentUid: string
   staffMembers: StaffMember[]
   onInitialize: () => Promise<TemporaryCredential[]>
   onReset: (loginId: string) => Promise<TemporaryCredential>
+  onCreate: (input: StaffCreateInput) => Promise<StaffCreateResult>
+  onUpdate: (input: StaffUpdateInput) => Promise<void>
+  onResetEmail: (uid: string) => Promise<TemporaryCredential>
 }) {
-  const [busyLoginId, setBusyLoginId] = useState('')
+  const [busyKey, setBusyKey] = useState('')
   const [message, setMessage] = useState('')
   const [temporaryCredentials, setTemporaryCredentials] = useState<TemporaryCredential[]>([])
+  const [newName, setNewName] = useState('')
+  const [newRole, setNewRole] = useState<'supervisor' | 'cashier'>('cashier')
+  const [newMode, setNewMode] = useState<'email' | 'id'>('email')
+  const [newIdentifier, setNewIdentifier] = useState('')
 
-  async function initializeAccounts() {
-    setBusyLoginId('initialize')
+  async function runAction(key: string, action: () => Promise<string>) {
+    setBusyKey(key)
     setMessage('')
     setTemporaryCredentials([])
     try {
-      const accounts = await onInitialize()
-      setTemporaryCredentials(accounts)
-      setMessage(
-        accounts.length > 0
-          ? 'Akun baru dibuat. Serahkan password sementara secara pribadi; kasir wajib menggantinya saat login pertama.'
-          : 'Semua akun kasir sudah dibuat.',
-      )
+      setMessage(await action())
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Akun kasir gagal dibuat.')
+      setMessage(error instanceof Error ? error.message : 'Aksi gagal dijalankan.')
     } finally {
-      setBusyLoginId('')
+      setBusyKey('')
     }
   }
 
-  async function resetPassword(member: StaffMember) {
-    setBusyLoginId(member.loginId)
-    setMessage('')
-    setTemporaryCredentials([])
-    try {
-      const result = await onReset(member.loginId)
-      setTemporaryCredentials([result])
-      setMessage(
-        'Password sementara hanya ditampilkan kali ini. Serahkan langsung kepada kasir; jangan kirim password lama.',
-      )
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Reset password gagal.')
-    } finally {
-      setBusyLoginId('')
-    }
+  const initializeAccounts = () => runAction('initialize', async () => {
+    const accounts = await onInitialize()
+    setTemporaryCredentials(accounts)
+    return accounts.length > 0
+      ? 'Akun baru dibuat. Serahkan password sementara secara pribadi; kasir wajib menggantinya saat login pertama.'
+      : 'Semua akun kasir sudah dibuat.'
+  })
+
+  const resetPassword = (member: StaffMember) => runAction(member.uid, async () => {
+    const result = member.loginId
+      ? await onReset(member.loginId)
+      : await onResetEmail(member.uid)
+    setTemporaryCredentials([result])
+    return 'Password sementara hanya ditampilkan kali ini. Serahkan langsung kepada anggota; sesi lama sudah dikeluarkan.'
+  })
+
+  const updateMember = (member: StaffMember, change: Omit<StaffUpdateInput, 'uid'>, success: string) =>
+    runAction(member.uid, async () => {
+      await onUpdate({ uid: member.uid, ...change })
+      return success
+    })
+
+  function renameMember(member: StaffMember) {
+    const name = window.prompt('Nama anggota', member.displayName)?.trim()
+    if (name && name !== member.displayName) void updateMember(member, { displayName: name }, 'Nama diperbarui.')
   }
+
+  function changeRole(member: StaffMember, role: 'supervisor' | 'cashier') {
+    if (role === member.role) return
+    if (!window.confirm(`Ubah ${member.displayName} dari ${staffRoleLabels[member.role]} menjadi ${staffRoleLabels[role]}?`)) return
+    void updateMember(member, { role }, `${member.displayName} sekarang ${staffRoleLabels[role]}.`)
+  }
+
+  function toggleActive(member: StaffMember) {
+    const next = !member.active
+    if (!next && !window.confirm(`Nonaktifkan ${member.displayName}? Anggota ini tidak bisa masuk sampai diaktifkan kembali.`)) return
+    void updateMember(member, { active: next }, next ? `${member.displayName} diaktifkan.` : `${member.displayName} dinonaktifkan.`)
+  }
+
+  function addMember(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void runAction('create', async () => {
+      const identifier = newIdentifier.trim()
+      const result = await onCreate({
+        displayName: newName.trim(),
+        role: newRole,
+        ...(newMode === 'email' ? { email: identifier } : { loginId: identifier }),
+      })
+      setNewName('')
+      setNewIdentifier('')
+      if (result.temporaryPassword) {
+        setTemporaryCredentials([{
+          loginId: result.email ?? result.loginId ?? '',
+          displayName: result.displayName,
+          temporaryPassword: result.temporaryPassword,
+        }])
+        return result.email
+          ? 'Anggota ditambahkan. Berikan password sementara ini secara pribadi; anggota bisa menggantinya lewat "Kirim tautan reset" di halaman login.'
+          : 'Anggota ditambahkan. Berikan ID dan password sementara ini secara pribadi; wajib diganti saat login pertama.'
+      }
+      return 'Email sudah punya akun login; anggota ditambahkan dan bisa masuk dengan password lamanya.'
+    })
+  }
+
+  const ordered = [...staffMembers].sort((first, second) =>
+    Number(second.active) - Number(first.active) ||
+    ['owner', 'supervisor', 'cashier'].indexOf(first.role) - ['owner', 'supervisor', 'cashier'].indexOf(second.role) ||
+    first.displayName.localeCompare(second.displayName, 'id'))
 
   return (
     <section className="pos-staff-admin">
       <div className="pos-staff-admin-heading">
         <div>
           <p className="pos-eyebrow">AKSES TIM</p>
-          <h2>Akun kasir</h2>
-          <p>Reset akan membuat password sementara baru dan mengeluarkan sesi lama kasir.</p>
+          <h2>Anggota tim</h2>
+          <p>
+            {isOwner
+              ? 'Owner mengendalikan semua anggota: tambah, ubah peran, nonaktifkan, dan reset password.'
+              : 'Supervisor dapat melihat anggota dan mereset password kasir. Perubahan lain hanya oleh owner.'}
+          </p>
         </div>
         {isOwner && (
           <button
             type="button"
-            className="pos-account-button"
+            className="pos-account-button secondary"
             onClick={() => void initializeAccounts()}
-            disabled={busyLoginId !== ''}
+            disabled={busyKey !== ''}
           >
-            {busyLoginId === 'initialize' ? 'Menyiapkan...' : 'Siapkan akun kasir'}
+            {busyKey === 'initialize' ? 'Menyiapkan...' : 'Siapkan akun kasir bawaan'}
           </button>
         )}
       </div>
+
+      {isOwner && (
+        <form className="pos-staff-form" onSubmit={addMember}>
+          <label>
+            Nama
+            <input value={newName} onChange={(event) => setNewName(event.target.value)} maxLength={60} required />
+          </label>
+          <label>
+            Peran
+            <select value={newRole} onChange={(event) => setNewRole(event.target.value as 'supervisor' | 'cashier')}>
+              <option value="cashier">Kasir</option>
+              <option value="supervisor">Supervisor</option>
+            </select>
+          </label>
+          <label>
+            Masuk dengan
+            <select value={newMode} onChange={(event) => setNewMode(event.target.value as 'email' | 'id')}>
+              <option value="email">Email</option>
+              <option value="id">ID (tanpa email)</option>
+            </select>
+          </label>
+          <label>
+            {newMode === 'email' ? 'Email' : 'ID login'}
+            <input
+              type={newMode === 'email' ? 'email' : 'text'}
+              value={newIdentifier}
+              onChange={(event) => setNewIdentifier(event.target.value)}
+              placeholder={newMode === 'email' ? 'nama@email.com' : 'huruf kecil/angka, min. 3'}
+              required
+            />
+          </label>
+          <button type="submit" className="pos-account-button" disabled={busyKey !== ''}>
+            {busyKey === 'create' ? 'Menambahkan...' : 'Tambah anggota'}
+          </button>
+        </form>
+      )}
 
       {message && <p className="pos-account-message" role="status">{message}</p>}
       {temporaryCredentials.length > 0 && (
@@ -526,25 +667,55 @@ function StaffAccountPanel({
       )}
 
       <div className="pos-staff-list">
-        {staffMembers.map((member) => (
-          <article key={member.uid}>
-            <div>
-              <strong>{member.displayName}</strong>
-              <span>ID kasir: {member.loginId}</span>
-            </div>
-            <button
-              type="button"
-              className="pos-account-button secondary"
-              onClick={() => void resetPassword(member)}
-              disabled={busyLoginId !== ''}
-            >
-              {busyLoginId === member.loginId ? 'Mereset...' : 'Reset password'}
-            </button>
-          </article>
-        ))}
+        {ordered.map((member) => {
+          const isSelf = member.uid === currentUid
+          const ownerControls = isOwner && !isSelf && member.role !== 'owner'
+          const canReset = member.role !== 'owner' && (member.loginId
+            ? isOwner || member.role === 'cashier'
+            : isOwner)
+          return (
+            <article key={member.uid} className={member.active ? '' : 'pos-staff-inactive'}>
+              <div>
+                <strong>
+                  {member.displayName}
+                  <em className={`pos-role-badge ${member.role}`}>{staffRoleLabels[member.role]}</em>
+                  {!member.active && <em className="pos-role-badge off">Nonaktif</em>}
+                  {isSelf && <em className="pos-role-badge self">Anda</em>}
+                </strong>
+                <span>{member.loginId ? `ID login: ${member.loginId}` : member.email ? `Email: ${member.email}` : 'Akun email'}</span>
+              </div>
+              <div className="pos-staff-controls">
+                {ownerControls && (
+                  <>
+                    <select
+                      value={member.role}
+                      disabled={busyKey !== ''}
+                      aria-label={`Peran ${member.displayName}`}
+                      onChange={(event) => changeRole(member, event.target.value as 'supervisor' | 'cashier')}
+                    >
+                      <option value="cashier">Kasir</option>
+                      <option value="supervisor">Supervisor</option>
+                    </select>
+                    <button type="button" className="pos-account-button secondary" disabled={busyKey !== ''} onClick={() => renameMember(member)}>
+                      Ubah nama
+                    </button>
+                    <button type="button" className="pos-account-button secondary" disabled={busyKey !== ''} onClick={() => toggleActive(member)}>
+                      {member.active ? 'Nonaktifkan' : 'Aktifkan'}
+                    </button>
+                  </>
+                )}
+                {canReset && !isSelf && (
+                  <button type="button" className="pos-account-button secondary" disabled={busyKey !== ''} onClick={() => void resetPassword(member)}>
+                    {busyKey === member.uid ? 'Memproses...' : 'Reset password'}
+                  </button>
+                )}
+              </div>
+            </article>
+          )
+        })}
         {staffMembers.length === 0 && (
           <p className="pos-account-empty">
-            Belum ada akun kasir. Owner dapat menyiapkannya di sini.
+            Belum ada anggota. Owner dapat menambahkannya di sini.
           </p>
         )}
       </div>
@@ -1160,20 +1331,21 @@ function PosApp() {
     return onSnapshot(
       collection(database, 'staff'),
       (snapshot) => {
-        const next = snapshot.docs.flatMap((document) => {
+        const next = snapshot.docs.flatMap((document): StaffMember[] => {
           const data = document.data()
           if (
-            data.role !== 'cashier' ||
-            data.active !== true ||
-            typeof data.loginId !== 'string' ||
-            typeof data.displayName !== 'string'
+            (data.role !== 'owner' && data.role !== 'supervisor' && data.role !== 'cashier') ||
+            typeof data.displayName !== 'string' && typeof data.email !== 'string' && typeof data.loginId !== 'string'
           ) {
             return []
           }
           return [{
             uid: document.id,
-            loginId: data.loginId,
-            displayName: data.displayName,
+            role: data.role,
+            active: data.active === true,
+            displayName: typeof data.displayName === 'string' ? data.displayName : String(data.email ?? data.loginId),
+            ...(typeof data.loginId === 'string' ? { loginId: data.loginId } : {}),
+            ...(typeof data.email === 'string' ? { email: data.email } : {}),
           }]
         })
         setStaffMembers(next.sort((first, second) => first.displayName.localeCompare(second.displayName, 'id')))
@@ -1491,6 +1663,19 @@ function PosApp() {
     await setStockBatch({ items, reason })
   }
 
+  async function resetAllPosStock() {
+    if (window.prompt('Semua stok POS akan menjadi 0 (riwayat tetap tercatat). Ketik RESET untuk melanjutkan.') !== 'RESET') return
+    setSavingSku('semua produk')
+    try {
+      const result = await httpsCallable<{ confirm: string }, { resetCount: number }>(functions, 'resetAllStock')({ confirm: 'RESET' })
+      window.alert(`Stok POS ${result.data.resetCount} produk sudah direset ke 0.`)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Reset stok POS gagal.')
+    } finally {
+      setSavingSku('')
+    }
+  }
+
   async function addStockBatch(
     items: StockCountInput[],
     reason: string,
@@ -1519,6 +1704,27 @@ function PosApp() {
     >(functions, 'resetCashierPassword')
     const result = await reset({ loginId })
     return result.data
+  }
+
+  async function createStaffMember(input: StaffCreateInput): Promise<StaffCreateResult> {
+    const create = httpsCallable<StaffCreateInput, StaffCreateResult>(functions, 'createStaffMember')
+    return (await create(input)).data
+  }
+
+  async function updateStaffMember(input: StaffUpdateInput): Promise<void> {
+    await httpsCallable<StaffUpdateInput, { ok: boolean }>(functions, 'updateStaffMember')(input)
+  }
+
+  async function resetStaffEmailPassword(uid: string): Promise<TemporaryCredential> {
+    const result = await httpsCallable<
+      { uid: string },
+      { email: string; displayName: string; temporaryPassword: string }
+    >(functions, 'resetStaffEmailPassword')({ uid })
+    return {
+      loginId: result.data.email,
+      displayName: result.data.displayName,
+      temporaryPassword: result.data.temporaryPassword,
+    }
   }
 
   if (authLoading) {
@@ -1586,7 +1792,7 @@ function PosApp() {
   const ownsShift = shiftHolder?.cashierUid === user.uid
   const canManageStock = profile.role !== 'cashier'
   const visibleNavigation = posNavigation.filter(
-    (item) => item.id === 'monitor' ? canManageStock : canManageStock || (item.ready && item.id !== 'stock' && item.id !== 'b2b-members'),
+    (item) => item.id === 'marketplace-hub' ? isOwner : item.id === 'monitor' || item.id === 'marketplace-sync' || item.id === 'ledger' ? canManageStock : canManageStock || (item.ready && item.id !== 'stock' && item.id !== 'b2b-members'),
   )
   const navBadge = (id: string) =>
     id === 'retail-members' ? memberData.pendingCount : id === 'web-order' ? webOrderData.newCount : id === 'chat' ? chatData.unreadTotal + ops.shopeeUnreadChats + ops.freshstockUnreadChats : id === 'marketplace' ? ops.shopeeToShip + ops.freshstockToShip : id === 'monitor' ? staffOnline.online.length : 0
@@ -1716,7 +1922,7 @@ function PosApp() {
                 aria-current={activePanel === 'staff' ? 'page' : undefined}
               >
                 <span className="pos-nav-icon" aria-hidden="true">♙</span>
-                <span>Anggota Kasir</span>
+                <span>Anggota Tim</span>
               </a>
             </div>
           )}
@@ -1789,10 +1995,18 @@ function PosApp() {
             <MarketplaceShopee />
           ) : activePanel === 'marketplace-margin' ? (
             <MarketplaceMargin />
+          ) : activePanel === 'ledger' && canManageStock ? (
+            <Ledger />
+          ) : activePanel === 'kulak' ? (
+            <Kulak canRecord={canManageStock} />
+          ) : activePanel === 'marketplace-hub' && isOwner ? (
+            <MarketplaceHub />
+          ) : activePanel === 'marketplace-sync' && canManageStock ? (
+            <MarketplaceSync isOwner={isOwner} />
           ) : activePanel === 'monitor' && canManageStock ? (
             <StaffOnline shift={shiftData.state && shiftData.shift ? { cashierUid: shiftData.state.cashierUid, cashierName: shiftData.state.cashierName, sales: shiftData.shift.totals.sales, count: shiftData.shift.totals.count, openedAt: shiftData.shift.openedAt } : shiftData.state ? { cashierUid: shiftData.state.cashierUid, cashierName: shiftData.state.cashierName, sales: 0, count: 0, openedAt: null } : null} online={staffOnline.online} offline={staffOnline.offline} now={staffOnline.now} />
           ) : activePanel === 'tiktok' ? (
-            <MarketplaceTiktok />
+            <MarketplaceTiktok canManage={canManageStock} isOwner={isOwner} />
           ) : activePanel === 'chat' ? (
             <AllChats
               storeUnread={chatData.unreadTotal}
@@ -1864,6 +2078,16 @@ function PosApp() {
                     >
                       Tambah stok massal
                     </button>
+                    {isOwner && (
+                      <button
+                        type="button"
+                        className="pos-account-button secondary"
+                        disabled={savingSku !== ''}
+                        onClick={() => void resetAllPosStock()}
+                      >
+                        Reset semua stok (owner)
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1933,15 +2157,19 @@ function PosApp() {
               <div className="pos-page-heading">
                 <div>
                   <p className="pos-eyebrow">AKSES TIM</p>
-                  <h1>Anggota kasir</h1>
-                  <p>Siapkan akun dan bantu kasir mengatur ulang password.</p>
+                  <h1>Anggota tim</h1>
+                  <p>Daftarkan anggota, atur peran, dan bantu mengatur ulang password.</p>
                 </div>
               </div>
               <StaffAccountPanel
                 isOwner={isOwner}
+                currentUid={user.uid}
                 staffMembers={staffMembers}
                 onInitialize={initializeCashierAccounts}
                 onReset={resetCashierPassword}
+                onCreate={createStaffMember}
+                onUpdate={updateStaffMember}
+                onResetEmail={resetStaffEmailPassword}
               />
             </>
           ) : (
@@ -1961,8 +2189,10 @@ function PosApp() {
       </div>
       <ShopeeWatcher />
       <ShopeeWatcher store="freshstock" />
+      <TiktokWatcher />
       <OfflineSalesStatus uid={user.uid} />
       <OpsToasts />
+      <ShipAlarmPopup />
       <YubiCalculator />
     </main>
   )

@@ -7,7 +7,6 @@ import { defineSecret } from 'firebase-functions/params'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 import { HttpsError, onCall, onRequest, type CallableRequest } from 'firebase-functions/v2/https'
 import { google } from 'googleapis'
-import { shopeeMarginMappings } from './shopeeMarginMappings'
 import { sendPosPush } from './pushNotifications'
 
 const shopeeOptions = {
@@ -18,8 +17,8 @@ const shopeeOptions = {
   timeoutSeconds: 120,
 } as const
 
-const partnerIdSecret = defineSecret('SHOPEE_PARTNER_ID')
-const partnerKeySecret = defineSecret('SHOPEE_PARTNER_KEY')
+export const partnerIdSecret = defineSecret('SHOPEE_PARTNER_ID')
+export const partnerKeySecret = defineSecret('SHOPEE_PARTNER_KEY')
 const options = {
   ...shopeeOptions,
   secrets: [partnerIdSecret, partnerKeySecret],
@@ -55,8 +54,9 @@ const authDoc = () => getFirestore().collection('shopeeAuth').doc(currentStore()
 
 type ShopeeAuth = { shopId: number; accessToken: string; refreshToken: string; expiresAt: number }
 type Json = Record<string, unknown>
-type Role = 'owner' | 'supervisor' | 'cashier'
-const shopeePushAlarmWindowMs = 10 * 60 * 1000
+export type Role = 'owner' | 'supervisor' | 'cashier'
+const shopeePushAlarmWindowMs = 12 * 60 * 1000
+const shopeePushAlarmRepeatMs = 110 * 1000
 
 function sign(base: string) {
   return createHmac('sha256', activePartnerKey()).update(base).digest('hex')
@@ -74,7 +74,7 @@ function storeCall<T>(callOptions: typeof storeOptions | typeof storeLongOptions
   return onCall(callOptions, (request) => storeContext.run(storeFromRequest(request), () => handler(request)))
 }
 
-async function requireStaff(request: { auth?: { uid: string } }, roles: Role[] = ['owner', 'supervisor', 'cashier']) {
+export async function requireStaff(request: { auth?: { uid: string } }, roles: Role[] = ['owner', 'supervisor', 'cashier']) {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Login diperlukan.')
   const data = (await getFirestore().collection('staff').doc(request.auth.uid).get()).data() as
     | { active?: boolean; role?: Role }
@@ -84,9 +84,9 @@ async function requireStaff(request: { auth?: { uid: string } }, roles: Role[] =
   }
 }
 
-const managers: Role[] = ['owner', 'supervisor']
+export const managers: Role[] = ['owner', 'supervisor']
 
-function input(request: { data: unknown }): Json {
+export function input(request: { data: unknown }): Json {
   return typeof request.data === 'object' && request.data !== null ? (request.data as Json) : {}
 }
 
@@ -96,7 +96,7 @@ function str(value: unknown, label: string, max = 100) {
   return text
 }
 
-function whole(value: unknown, label: string) {
+export function whole(value: unknown, label: string) {
   const number = Number(value)
   if (!Number.isFinite(number) || number < 0 || !Number.isInteger(number)) {
     throw new HttpsError('invalid-argument', `${label} harus bilangan bulat ≥ 0.`)
@@ -166,7 +166,7 @@ function checkJson(path: string, json: Json) {
   return json
 }
 
-async function shopCall(path: string, params: Record<string, string | number> = {}, body?: Json) {
+export async function shopCall(path: string, params: Record<string, string | number> = {}, body?: Json) {
   const response = await shopFetch(path, params, body)
   return checkJson(path, (await response.json()) as Json)
 }
@@ -191,8 +191,8 @@ async function shopImageUpload(fileName: string, contentType: string, bytes: Buf
   return checkJson(path, (await response.json()) as Json)
 }
 
-const list = (value: unknown): Json[] => (Array.isArray(value) ? (value as Json[]) : [])
-const obj = (value: unknown): Json => (typeof value === 'object' && value !== null ? (value as Json) : {})
+export const list = (value: unknown): Json[] => (Array.isArray(value) ? (value as Json[]) : [])
+export const obj = (value: unknown): Json => (typeof value === 'object' && value !== null ? (value as Json) : {})
 
 function productResponse(payload: Json): Json {
   return obj(payload.response)
@@ -333,7 +333,7 @@ type PendingMarginOrder = {
   lines: MarginLine[]
 }
 
-function amountValue(value: unknown): number | null {
+export function amountValue(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value !== 'string') return null
   const digits = value.trim().replace(/[^\d.-]/g, '')
@@ -341,85 +341,48 @@ function amountValue(value: unknown): number | null {
   return digits && Number.isFinite(valueNumber) ? valueNumber : null
 }
 
-type MarginSkuMapping = {
-  masterSku: string
-  factor: number
-  source: 'item-variant' | 'seller-sku' | 'single-item-sku' | 'variant-sku'
-}
+type VariantSku = { masterSku: string; grams: number; factor: number }
 
-const marginFactorOverrides: Record<string, number> = {
-  '24164512075:255356953423': 0.25,
-}
-
-function mappedMarginFactor(itemId: number, modelId: number, fallback: number) {
-  return marginFactorOverrides[`${itemId}:${modelId}`] ?? fallback
-}
-
-function marginMapping(itemId: number, modelId: number, itemSku: string, modelSku: string): MarginSkuMapping | null {
-  const exact = shopeeMarginMappings.find((entry) => entry.itemId === itemId && entry.modelId === modelId && entry.ready)
-  if (exact) return { masterSku: exact.sku, factor: mappedMarginFactor(itemId, modelId, exact.factor), source: 'item-variant' }
-  const sku = (modelSku || itemSku).trim().toUpperCase()
-  const parsedVariant = variantSkuMapping(sku)
-  if (parsedVariant) return parsedVariant
-  const bySku = shopeeMarginMappings.filter((entry) => entry.ready && entry.sku.toUpperCase() === sku)
-  const skuMappings = new Map(bySku.map((entry) => [`${entry.sku.toUpperCase()}:${entry.factor}`, entry]))
-  if (skuMappings.size === 1) {
-    const [entry] = skuMappings.values()
-    return { masterSku: entry.sku, factor: entry.factor, source: 'seller-sku' }
-  }
-
-  const byItem = shopeeMarginMappings.filter((entry) => entry.itemId === itemId && entry.ready)
-  const itemMappings = new Map(byItem.map((entry) => [`${entry.sku.toUpperCase()}:${entry.factor}`, entry]))
-  if (itemMappings.size === 1) {
-    const [entry] = itemMappings.values()
-    return { masterSku: entry.sku, factor: entry.factor, source: 'single-item-sku' }
-  }
-  return null
-}
-
-function variantSkuMapping(sku: string): MarginSkuMapping | null {
+// SKU pecahan Shopee berformat MASTER-<gram>G; HPP = HPP per kg master × gram / 1000.
+export function parseVariantSku(sku: string): VariantSku | null {
   const match = /^(.+)-([0-9]+)G$/.exec(sku.trim().toUpperCase())
   if (!match) return null
-  const masterSku = match[1]
   const grams = Number(match[2])
-  const hasMasterMapping = shopeeMarginMappings.some((entry) => entry.ready && entry.sku.toUpperCase() === masterSku)
-  return hasMasterMapping && Number.isFinite(grams) && grams > 0 && grams <= 1000
-    ? { masterSku, factor: grams / 1000, source: 'variant-sku' }
+  return Number.isFinite(grams) && grams > 0 ? { masterSku: match[1], grams, factor: grams / 1000 } : null
+}
+
+function resolveMarginSku(sku: string, masterCostBySku: Map<string, number>) {
+  const normalized = sku.trim().toUpperCase()
+  if (!normalized) return null
+  const baseCost = masterCostBySku.get(normalized)
+  if (baseCost !== undefined) return { masterSku: normalized, factor: 1, variant: false, baseCost }
+  const parsed = parseVariantSku(normalized)
+  const parsedCost = parsed ? masterCostBySku.get(parsed.masterSku) : undefined
+  return parsed && parsedCost !== undefined
+    ? { masterSku: parsed.masterSku, factor: parsed.factor, variant: true, baseCost: parsedCost }
     : null
 }
 
 function marginLines(items: Json[], masterCostBySku: Map<string, number>): MarginLine[] {
   return items.map((item) => {
-    const itemId = Number(item.item_id ?? 0)
-    const modelId = Number(item.model_id ?? 0)
-    const itemSku = String(item.item_sku ?? '')
-    const modelSku = String(item.model_sku ?? '')
+    const itemSku = String(item.item_sku ?? '').trim().toUpperCase()
+    const modelSku = String(item.model_sku ?? '').trim().toUpperCase()
     const parsedQuantity = Number(item.model_quantity_purchased ?? item.quantity_purchased)
     const quantity = Number.isFinite(parsedQuantity) && parsedQuantity > 0 ? parsedQuantity : null
-    const mapping = marginMapping(itemId, modelId, itemSku, modelSku)
-    const directSku = (modelSku || itemSku).trim().toUpperCase()
-    const directCost = mapping
-      ? masterCostBySku.get(mapping.masterSku)
-      : masterCostBySku.get(directSku)
-    const unitCost = directCost === undefined
-      ? null
-      : Math.round(directCost * (mapping?.factor ?? 1))
+    const resolved = resolveMarginSku(modelSku, masterCostBySku) ?? resolveMarginSku(itemSku, masterCostBySku)
+    const unitCost = resolved ? Math.round(resolved.baseCost * resolved.factor) : null
     return {
       name: String(item.item_name ?? ''),
       variant: String(item.model_name ?? ''),
-      sku: mapping?.masterSku ?? directSku,
+      sku: resolved?.masterSku ?? (modelSku || itemSku),
       quantity,
       unitCost,
       cost: unitCost === null || quantity === null ? null : Math.round(unitCost * quantity),
-      mappingSource: mapping
-        ? directCost !== undefined
-          ? mapping.source === 'single-item-sku'
-            ? 'Master Google Sheets · SKU item Shopee tunggal × faktor mapping Excel'
-            : mapping.source === 'variant-sku'
-              ? 'Master Google Sheets · SKU varian berat × faktor isi'
-            : 'Master Google Sheets · HPP efektif × faktor mapping Excel'
-          : 'SKU mapping tidak ditemukan di master Google Sheets'
-        : directCost !== undefined ? 'Master Google Sheets · SKU langsung' : 'Mapping HPP belum tersedia',
+      mappingSource: resolved
+        ? resolved.variant
+          ? 'Master Google Sheets · SKU varian pecahan × HPP per kg'
+          : 'Master Google Sheets · SKU langsung'
+        : 'SKU Shopee tidak ditemukan di master Google Sheets',
     }
   })
 }
@@ -428,14 +391,22 @@ const marginStart = Math.floor(new Date('2026-10-01T00:00:00+07:00').getTime() /
 const marginPendingStatuses = new Set(['READY_TO_SHIP', 'PROCESSED', 'SHIPPED', 'COMPLETED'])
 const marginCacheOptions = {
   ...shopeeOptions,
-  secrets: [partnerIdSecret, partnerKeySecret],
+  secrets: [partnerIdSecret, partnerKeySecret, freshstockPartnerIdSecret, freshstockPartnerKeySecret],
   maxInstances: 1,
   concurrency: 1,
+  timeoutSeconds: 300,
 }
 
 function marginDocId(orderSn: string) {
   return Buffer.from(orderSn).toString('base64url')
 }
+
+// Freshstock memakai koleksi terpisah; data 2goFresh yang lama tetap di nama koleksi semula.
+const marginSuffix = (store: ShopeeStore) => (store === 'freshstock' ? 'Freshstock' : '')
+const marginReleasedName = (store: ShopeeStore) => `shopeeMarginReleased${marginSuffix(store)}`
+const marginPendingName = (store: ShopeeStore) => `shopeeMarginPending${marginSuffix(store)}`
+const marginSyncDocName = (name: string) => (currentStore() === 'freshstock' ? `${name}-freshstock` : name)
+const marginStores: ShopeeStore[] = ['2gofresh', 'freshstock']
 
 function jakartaDayStart(timestamp: number) {
   const date = new Date(timestamp * 1000)
@@ -536,8 +507,8 @@ async function fetchShopeeMarginWindow(from: number, to: number, orderTimeField:
   }
 
   const database = getFirestore()
-  const releasedCollection = database.collection('shopeeMarginReleased')
-  const pendingCollection = database.collection('shopeeMarginPending')
+  const releasedCollection = database.collection(marginReleasedName(currentStore()))
+  const pendingCollection = database.collection(marginPendingName(currentStore()))
   const writes: Array<Promise<unknown>> = []
   for (const [orderSn, escrow] of escrowByOrder) {
     const detail = detailsByOrder.get(orderSn)
@@ -578,8 +549,8 @@ async function fetchShopeeMarginWindow(from: number, to: number, orderTimeField:
 
 async function withMarginSyncLock(task: () => Promise<void>) {
   const database = getFirestore()
-  const lock = database.collection('shopeeMarginSync').doc('lock')
-  const state = database.collection('shopeeMarginSync').doc('state')
+  const lock = database.collection('shopeeMarginSync').doc(marginSyncDocName('lock'))
+  const state = database.collection('shopeeMarginSync').doc(marginSyncDocName('state'))
   const acquired = await database.runTransaction(async (transaction) => {
     const lockSnapshot = await transaction.get(lock)
     const stateSnapshot = await transaction.get(state)
@@ -614,41 +585,50 @@ async function withMarginSyncLock(task: () => Promise<void>) {
 
 export const syncShopeeMarginCache = onSchedule(
   { ...marginCacheOptions, schedule: 'every 10 minutes', timeZone: 'Asia/Jakarta' },
-  async () => withMarginSyncLock(async () => {
-    const now = Math.floor(Date.now() / 1000)
-    const from = Math.max(marginStart, now - 30 * 60)
-    const result = await fetchShopeeMarginWindow(from, now, 'update_time')
-    const state = getFirestore().collection('shopeeMarginSync').doc('state')
-    await state.set({ lastSyncAt: FieldValue.serverTimestamp(), ...result }, { merge: true })
-    logger.info('Shopee margin cache incrementally synchronized.', result)
-  }),
+  async () => {
+    for (const store of marginStores) {
+      await storeContext.run(store, () => withMarginSyncLock(async () => {
+        const now = Math.floor(Date.now() / 1000)
+        const from = Math.max(marginStart, now - 30 * 60)
+        const result = await fetchShopeeMarginWindow(from, now, 'update_time')
+        const state = getFirestore().collection('shopeeMarginSync').doc(marginSyncDocName('state'))
+        await state.set({ lastSyncAt: FieldValue.serverTimestamp(), ...result }, { merge: true })
+        logger.info('Shopee margin cache incrementally synchronized.', { store, ...result })
+      }))
+    }
+  },
 )
 
 export const backfillShopeeMarginCache = onSchedule(
   { ...marginCacheOptions, schedule: 'every 1 hours', timeZone: 'Asia/Jakarta' },
-  async () => withMarginSyncLock(async () => {
-    const database = getFirestore()
-    const state = database.collection('shopeeMarginSync').doc('state')
-    const snapshot = await state.get()
-    if (snapshot.get('backfillComplete') === true) return
-    const now = Math.floor(Date.now() / 1000)
-    const to = Math.min(now, Number(snapshot.get('backfillNextEnd') ?? now))
-    const from = Math.max(marginStart, to - 24 * 60 * 60)
-    const result = await fetchShopeeMarginWindow(from, to, 'create_time')
-    await state.set({
-      backfillNextEnd: from,
-      backfillComplete: from <= marginStart,
-      lastBackfillAt: FieldValue.serverTimestamp(),
-      ...result,
-    }, { merge: true })
-    logger.info('Shopee margin historical cache synchronized.', { from, to, ...result })
-  }),
+  async () => {
+    for (const store of marginStores) {
+      await storeContext.run(store, () => withMarginSyncLock(async () => {
+        const database = getFirestore()
+        const state = database.collection('shopeeMarginSync').doc(marginSyncDocName('state'))
+        const snapshot = await state.get()
+        if (snapshot.get('backfillComplete') === true) return
+        const now = Math.floor(Date.now() / 1000)
+        const to = Math.min(now, Number(snapshot.get('backfillNextEnd') ?? now))
+        const from = Math.max(marginStart, to - 24 * 60 * 60)
+        const result = await fetchShopeeMarginWindow(from, to, 'create_time')
+        await state.set({
+          backfillNextEnd: from,
+          backfillComplete: from <= marginStart,
+          lastBackfillAt: FieldValue.serverTimestamp(),
+          ...result,
+        }, { merge: true })
+        logger.info('Shopee margin historical cache synchronized.', { store, from, to, ...result })
+      }))
+    }
+  },
 )
 
 export const shopeeRealizedMargins = onCall(
   shopeeOptions,
   async (request) => {
     await requireStaff(request)
+    const store = storeFromRequest(request)
     const data = input(request)
     const period = typeof data.period === 'string' ? data.period : 'week'
     if (!['day', 'week', 'month'].includes(period)) throw new HttpsError('invalid-argument', 'Periode laporan tidak valid.')
@@ -661,17 +641,17 @@ export const shopeeRealizedMargins = onCall(
         : Math.floor(new Date(`${new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit' }).format(new Date(now * 1000))}-01T00:00:00+07:00`).getTime() / 1000)
     const database = getFirestore()
     const [releasedSnapshot, pendingSnapshot, stateSnapshot, masterCostBySku] = await Promise.all([
-      database.collection('shopeeMarginReleased')
+      database.collection(marginReleasedName(store))
         .where('releasedAt', '>=', rangeStart * 1000)
         .where('releasedAt', '<=', now * 1000)
         .limit(2000)
         .get(),
-      database.collection('shopeeMarginPending')
+      database.collection(marginPendingName(store))
         .where('createdAt', '>=', rangeStart * 1000)
         .where('createdAt', '<=', now * 1000)
         .limit(2000)
         .get(),
-      database.collection('shopeeMarginSync').doc('state').get(),
+      database.collection('shopeeMarginSync').doc(store === 'freshstock' ? 'state-freshstock' : 'state').get(),
       marginMasterCosts(),
     ])
     const releasedRows = releasedSnapshot.docs.map((document) => document.data())
@@ -913,7 +893,7 @@ type ShopeeVariantModel = {
   grams: number | null
 }
 
-function masterNumber(value: unknown): number | null {
+export function masterNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value !== 'string') return null
   const text = value.trim()
@@ -933,18 +913,14 @@ function gramsFromText(value: string): number | null {
   return Math.round(amount * (/^(kg|kilogram)$/i.test(match[2]) ? 1000 : 1))
 }
 
-function factorForModel(model: Json, itemId: number): number | null {
-  const modelId = Number(model.model_id ?? 0)
-  const sku = String(model.model_sku ?? '').trim().toUpperCase()
-  const exact = shopeeMarginMappings.find((entry) => entry.itemId === itemId && entry.modelId === modelId && entry.ready)
-  if (exact) return mappedMarginFactor(itemId, modelId, exact.factor)
-  const skuMatch = /^(.+)-([0-9]+)G$/.exec(sku)
-  if (skuMatch) return Number(skuMatch[2]) / 1000
+function factorForModel(model: Json): number | null {
+  const parsed = parseVariantSku(String(model.model_sku ?? ''))
+  if (parsed) return parsed.factor
   const grams = gramsFromText(String(model.model_name ?? ''))
   return grams === null ? null : grams / 1000
 }
 
-const marketplaceVariantTiers = [
+export const marketplaceVariantTiers = [
   { grams: 1000, name: '1 kg', priceIndex: 0 },
   { grams: 500, name: '500 gr', priceIndex: 1 },
   { grams: 250, name: '250 gr', priceIndex: 2 },
@@ -965,36 +941,24 @@ async function shopeeVariantMasterRows() {
   return result.data.values ?? []
 }
 
-async function shopeeVariantPlan(itemId: number, masterRows: unknown[][]) {
-  const itemMappings = shopeeMarginMappings.filter((entry) => entry.itemId === itemId && entry.ready)
-  const masterSkus = [...new Set(itemMappings.map((entry) => entry.sku.trim().toUpperCase()))]
-  if (masterSkus.length !== 1) {
-    return { itemId, name: '', sku: '', eligible: false, message: 'SKU produk Shopee belum memiliki satu mapping master yang pasti.' }
-  }
-  const sku = masterSkus[0]
-  const masterMatches = masterRows.filter((row, index) => index > 0 && String(row[1] ?? '').trim().toUpperCase() === sku)
-  if (masterMatches.length !== 1) {
-    return { itemId, name: '', sku, eligible: false, message: `SKU ${sku} tidak ditemukan tepat satu kali di master.` }
-  }
-  const master = masterMatches[0]
+// Tier harga master yang boleh dibuat sebagai varian Shopee untuk satu baris master produk KG.
+export function allowedVariantTiers(master: unknown[]) {
   const unit = String(master[4] ?? '').trim().toUpperCase()
   const minQty = masterNumber(master[0])
-  if (unit !== 'KG' || minQty === null || minQty <= 0) {
-    return { itemId, name: String(master[3] ?? ''), sku, eligible: false, message: 'Hanya produk KG dengan MIN_QTY yang valid yang bisa direncanakan otomatis.' }
-  }
+  if (unit !== 'KG' || minQty === null || minQty <= 0) return { unit, minQty, eligibleTiers: [], allowedTiers: [] }
   const eligibleTiers: MarketplaceVariantTier[] = marketplaceVariantTiers
     .map((tier) => ({ ...tier, price: masterNumber(master[15 + tier.priceIndex]) ?? 0 }))
     .filter((tier) => tier.grams >= minQty * 1000 && tier.price >= 100)
     .sort((a, b) => a.grams - b.grams)
-  if (!eligibleTiers.length) {
-    return { itemId, name: String(master[3] ?? ''), sku, eligible: false, message: 'Tidak ada tier harga master yang memenuhi MIN_QTY.' }
-  }
   const allowedTiers: MarketplaceVariantTier[] = []
   for (const tier of eligibleTiers) {
-    const candidate = [...allowedTiers, tier]
-    const prices = candidate.map((entry) => entry.price)
+    const prices = [...allowedTiers, tier].map((entry) => entry.price)
     if (Math.max(...prices) / Math.min(...prices) <= 7) allowedTiers.push(tier)
   }
+  return { unit, minQty, eligibleTiers, allowedTiers }
+}
+
+async function shopeeVariantPlan(itemId: number, masterRows: unknown[][]) {
   const [baseResponse, modelResponse] = await Promise.all([
     shopCall('/api/v2/product/get_item_base_info', { item_id_list: String(itemId) }),
     shopCall('/api/v2/product/get_model_list', { item_id: itemId }),
@@ -1002,13 +966,38 @@ async function shopeeVariantPlan(itemId: number, masterRows: unknown[][]) {
   const item = list(obj(baseResponse.response).item_list).find((entry) => Number(entry.item_id ?? 0) === itemId)
   const modelData = obj(modelResponse.response)
   const rawModels = list(modelData.model)
+  // SKU induk diambil langsung dari SKU produk/varian Shopee (realtime), bukan dari mapping statis.
+  const masterSkuSet = new Set(masterRows.slice(1).map((row) => normalizeSku(row[1])))
+  const masterSkus = [...new Set(
+    [item?.item_sku, ...rawModels.map((model) => model.model_sku)]
+      .map(normalizeSku)
+      .filter(Boolean)
+      .map((value) => (masterSkuSet.has(value) ? value : skuBase(value)))
+      .filter((value) => masterSkuSet.has(value)),
+  )]
+  if (masterSkus.length !== 1) {
+    return { itemId, name: '', sku: '', eligible: false, message: 'SKU produk/varian Shopee belum menunjuk satu SKU induk master yang pasti.' }
+  }
+  const sku = masterSkus[0]
+  const masterMatches = masterRows.filter((row, index) => index > 0 && String(row[1] ?? '').trim().toUpperCase() === sku)
+  if (masterMatches.length !== 1) {
+    return { itemId, name: '', sku, eligible: false, message: `SKU ${sku} tidak ditemukan tepat satu kali di master.` }
+  }
+  const master = masterMatches[0]
+  const { unit, minQty, eligibleTiers, allowedTiers } = allowedVariantTiers(master)
+  if (unit !== 'KG' || minQty === null || minQty <= 0) {
+    return { itemId, name: String(master[3] ?? ''), sku, eligible: false, message: 'Hanya produk KG dengan MIN_QTY yang valid yang bisa direncanakan otomatis.' }
+  }
+  if (!eligibleTiers.length) {
+    return { itemId, name: String(master[3] ?? ''), sku, eligible: false, message: 'Tidak ada tier harga master yang memenuhi MIN_QTY.' }
+  }
   const models: ShopeeVariantModel[] = rawModels.map((model) => ({
     modelId: Number(model.model_id ?? 0),
     name: String(model.model_name ?? ''),
     sku: String(model.model_sku ?? ''),
     price: Number(obj(obj(model.price_info)).original_price ?? obj(list(model.price_info)[0]).original_price ?? 0),
     stock: Number(obj(obj(model.stock_info_v2).summary_info).total_available_stock ?? 0),
-    grams: factorForModel(model, itemId) === null ? gramsFromText(String(model.model_name ?? '')) : Math.round(factorForModel(model, itemId)! * 1000),
+    grams: factorForModel(model) === null ? gramsFromText(String(model.model_name ?? '')) : Math.round(factorForModel(model)! * 1000),
   }))
   const tierVariation = list(modelData.tier_variation)
   const unsupported = tierVariation.length !== 1
@@ -1068,23 +1057,20 @@ export const shopeeVariantCandidates = onCall(options, async (request) => {
     masterBySku.set(sku, records)
   }
 
-  const mappedByItem = new Map<number, Set<string>>()
-  for (const mapping of shopeeMarginMappings) {
-    if (!mapping.ready) continue
-    const skus = mappedByItem.get(mapping.itemId) ?? new Set<string>()
-    skus.add(mapping.sku.trim().toUpperCase())
-    mappedByItem.set(mapping.itemId, skus)
-  }
-  const candidates = [...mappedByItem.entries()]
-    .flatMap(([itemId, skus]) => {
-      if (skus.size !== 1) return []
-      const [sku] = skus
+  const listed = (await listShopeeItems()).filter((entry) => entry.status === 'NORMAL')
+  const found: { itemId: number; sku: string; name: string; minQty: number }[] = []
+  for (let start = 0; start < listed.length; start += 50) {
+    const ids = listed.slice(start, start + 50).map((entry) => entry.itemId)
+    const base = obj((await shopCall('/api/v2/product/get_item_base_info', { item_id_list: ids.join(',') })).response)
+    for (const item of list(base.item_list)) {
+      const itemSku = normalizeSku(item.item_sku)
+      const sku = masterBySku.has(itemSku) ? itemSku : skuBase(itemSku)
       const master = masterBySku.get(sku)
-      if (master?.length !== 1) return []
-      return [{ itemId, sku, name: master[0].name, minQty: master[0].minQty }]
-    })
-    .sort((a, b) => a.name.localeCompare(b.name, 'id') || a.itemId - b.itemId)
-
+      if (master?.length !== 1) continue
+      found.push({ itemId: Number(item.item_id), sku, name: master[0].name, minQty: master[0].minQty })
+    }
+  }
+  const candidates = found.sort((a, b) => a.name.localeCompare(b.name, 'id') || a.itemId - b.itemId)
   const page = candidates.slice(offset, offset + 25)
   const baseResponse = page.length > 0
     ? await shopCall('/api/v2/product/get_item_base_info', { item_id_list: page.map((entry) => entry.itemId).join(',') })
@@ -1106,7 +1092,7 @@ export const shopeeVariantCandidates = onCall(options, async (request) => {
 type CatalogGap = { sku: string; name: string; category: string; unit: string; minQty: number | null; price: number | null }
 type UnmatchedListing = { itemId: number; sku: string; name: string; status: string }
 
-const normalizeSku = (value: unknown) => String(value ?? '').trim().toUpperCase()
+export const normalizeSku = (value: unknown) => String(value ?? '').trim().toUpperCase()
 const skuBase = (sku: string) => sku.replace(/-\d+G$/, '')
 
 async function listShopeeItems() {
@@ -1153,16 +1139,6 @@ async function compareMasterWithShopee() {
     if (hit) matched.add(hit)
     return Boolean(hit)
   }
-  const mappedByItem = new Map<number, Set<string>>()
-  if (currentStore() === '2gofresh') {
-    for (const mapping of shopeeMarginMappings) {
-      if (!mapping.ready) continue
-      const skus = mappedByItem.get(mapping.itemId) ?? new Set<string>()
-      skus.add(normalizeSku(mapping.sku))
-      mappedByItem.set(mapping.itemId, skus)
-    }
-  }
-
   const statusById = new Map(listed.map((entry) => [entry.itemId, entry.status]))
   const needModels: { itemId: number; name: string; status: string }[] = []
   for (let start = 0; start < listed.length; start += 50) {
@@ -1172,8 +1148,7 @@ async function compareMasterWithShopee() {
       const itemId = Number(item.item_id)
       const status = statusById.get(itemId) ?? 'NORMAL'
       const name = String(item.item_name ?? '')
-      let found = markMatched(normalizeSku(item.item_sku))
-      for (const sku of mappedByItem.get(itemId) ?? []) found = markMatched(sku) || found
+      const found = markMatched(normalizeSku(item.item_sku))
       if (found) continue
       if (item.has_model === true) needModels.push({ itemId, name, status })
       else unmatched.push({ itemId, sku: String(item.item_sku ?? ''), name, status })
@@ -1716,7 +1691,7 @@ export const shopeePublishProduct = onCall({ ...options, timeoutSeconds: 300 }, 
   return { itemId, sku, stock, imageId }
 })
 
-async function currentMasterMarketplacePrice(sku: string, priceIndex: number): Promise<number> {
+export async function currentMasterMarketplacePrice(sku: string, priceIndex: number): Promise<number | null> {
   const auth = new google.auth.GoogleAuth({ scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'] })
   const sheets = google.sheets({ version: 'v4', auth })
   const result = await sheets.spreadsheets.values.get({
@@ -1725,11 +1700,7 @@ async function currentMasterMarketplacePrice(sku: string, priceIndex: number): P
     valueRenderOption: 'UNFORMATTED_VALUE',
   })
   const row = (result.data.values ?? []).find((values, index) => index > 0 && String(values[1] ?? '').trim().toUpperCase() === sku)
-  const price = amountValue(row?.[15 + priceIndex])
-  if (price === null) {
-    throw new HttpsError('failed-precondition', `Harga marketplace master untuk SKU ${sku} belum tersedia.`)
-  }
-  return price
+  return amountValue(row?.[15 + priceIndex])
 }
 
 export const shopeeUpdatePrice = storeCall(storeOptions, async (request) => {
@@ -1740,30 +1711,31 @@ export const shopeeUpdatePrice = storeCall(storeOptions, async (request) => {
   const price = whole(data.price, 'Harga')
   if (price < 100) throw new HttpsError('invalid-argument', 'Harga minimal Rp100.')
   // Harga minimum master Marketplace hanya berlaku untuk toko 2goFresh.
-  const enforceMasterMinimum = currentStore() === '2gofresh'
-  const mapping = enforceMasterMinimum
-    ? shopeeMarginMappings.find((entry) => entry.itemId === itemId && entry.modelId === modelId && entry.ready)
-    : undefined
-  let minimumPrice: number | null = mapping?.marketplacePrice ?? null
-  let masterSku: string | undefined = mapping?.sku
-  let priceIndex: number | undefined = mapping?.marketplacePriceIndex
-  if (enforceMasterMinimum && !mapping) {
-    const models = obj((await shopCall('/api/v2/product/get_model_list', { item_id: itemId })).response)
-    const model = list(models.model).find((entry) => Number(entry.model_id ?? 0) === modelId)
-    const parsed = variantSkuMapping(String(model?.model_sku ?? ''))
-    if (parsed) {
-      masterSku = parsed.masterSku
-      const grams = Math.round(parsed.factor * 1000)
-      priceIndex = marketplaceVariantTiers.find((tier) => tier.grams === grams)?.priceIndex
+  let minimumPrice: number | null = null
+  if (currentStore() === '2gofresh') {
+    // Tier harga ditentukan realtime dari SKU Shopee: MASTER-<gram>G memakai kolom tier gram tersebut, SKU induk memakai tier 1 kg.
+    let sku = ''
+    if (modelId > 0) {
+      const models = obj((await shopCall('/api/v2/product/get_model_list', { item_id: itemId })).response)
+      sku = normalizeSku(list(models.model).find((entry) => Number(entry.model_id ?? 0) === modelId)?.model_sku)
+    } else {
+      const base = obj((await shopCall('/api/v2/product/get_item_base_info', { item_id_list: String(itemId) })).response)
+      sku = normalizeSku(list(base.item_list).find((entry) => Number(entry.item_id ?? 0) === itemId)?.item_sku)
     }
-  }
-  if (masterSku && priceIndex !== undefined) {
-    try {
-      minimumPrice = await currentMasterMarketplacePrice(masterSku, priceIndex)
-    } catch (error) {
-      logger.error('Unable to verify the current master marketplace price before Shopee price update.', { itemId, modelId, error })
-      if (error instanceof HttpsError) throw error
-      throw new HttpsError('failed-precondition', 'Harga master Google Sheets tidak dapat diverifikasi. Harga Shopee tidak diubah.')
+    const parsed = parseVariantSku(sku)
+    const tierIndex = parsed ? marketplaceVariantTiers.find((tier) => tier.grams === parsed.grams)?.priceIndex : undefined
+    const masterSku = parsed && tierIndex !== undefined ? parsed.masterSku : sku
+    const priceIndex = parsed ? tierIndex : 0
+    if (masterSku && priceIndex !== undefined) {
+      try {
+        minimumPrice = await currentMasterMarketplacePrice(masterSku, priceIndex)
+      } catch (error) {
+        logger.error('Unable to verify the current master marketplace price before Shopee price update.', { itemId, modelId, error })
+        throw new HttpsError('failed-precondition', 'Harga master Google Sheets tidak dapat diverifikasi. Harga Shopee tidak diubah.')
+      }
+      if (minimumPrice === null && parsed) {
+        throw new HttpsError('failed-precondition', `Harga marketplace master untuk SKU ${masterSku} belum tersedia.`)
+      }
     }
   }
   if (minimumPrice !== null && price < minimumPrice) {
@@ -1790,6 +1762,373 @@ export const shopeeUpdateStock = storeCall(storeOptions, async (request) => {
     stock_list: [{ model_id: modelId, seller_stock: [{ stock }] }],
   })
   return { ok: true }
+})
+
+let masterRowsCache: { at: number; rows: unknown[][] } | null = null
+export async function cachedMasterRows() {
+  if (masterRowsCache && Date.now() - masterRowsCache.at < 60_000) return masterRowsCache.rows
+  const rows = await shopeeVariantMasterRows()
+  masterRowsCache = { at: Date.now(), rows }
+  return rows
+}
+
+function shopeePriceInfo(priceInfo: unknown) {
+  const entry = Array.isArray(priceInfo) ? obj(priceInfo[0]) : obj(priceInfo)
+  const original = Number(entry.original_price ?? 0) || 0
+  const current = Number(entry.current_price ?? 0) || original
+  return { original, current }
+}
+
+function shopeeStockOf(stockInfo: unknown) {
+  return Number(obj(obj(stockInfo).summary_info).total_available_stock ?? 0) || 0
+}
+
+// Cocokkan SKU Shopee ke master: SKU induk = tier 1 kg, MASTER-<gram>G = tier sesuai gram.
+export function resolveSyncSku(rawSku: string, masterBySku: Map<string, unknown[]>) {
+  const sku = normalizeSku(rawSku)
+  const direct = masterBySku.get(sku)
+  if (direct) {
+    const kg = String(direct[4] ?? '').trim().toUpperCase() === 'KG'
+    return { masterSku: sku, row: direct, grams: kg ? 1000 : null, priceIndex: 0 as number | null }
+  }
+  const parsed = parseVariantSku(sku)
+  const row = parsed ? masterBySku.get(parsed.masterSku) : undefined
+  if (!parsed || !row) return null
+  return {
+    masterSku: parsed.masterSku,
+    row,
+    grams: parsed.grams,
+    priceIndex: marketplaceVariantTiers.find((tier) => tier.grams === parsed.grams)?.priceIndex ?? null,
+  }
+}
+
+export function masterSkuIndex(masterRows: unknown[][]) {
+  const masterBySku = new Map<string, unknown[]>()
+  for (const row of masterRows.slice(1)) {
+    const sku = normalizeSku(row[1])
+    if (sku && !masterBySku.has(sku)) masterBySku.set(sku, row)
+  }
+  return masterBySku
+}
+
+type RawSyncModel = {
+  modelId: number | string
+  name: string
+  sku: string
+  price: number
+  originalPrice: number
+  stock: number
+  nameGrams: number | null
+}
+
+// Bandingkan setiap varian marketplace dengan harga tier master (dipakai Shopee dan TikTok).
+export function buildSyncModels(rawModels: RawSyncModel[], masterBySku: Map<string, unknown[]>) {
+  return rawModels.map((model) => {
+    const rawSku = model.sku.trim()
+    const resolved = rawSku ? resolveSyncSku(rawSku, masterBySku) : null
+    const grams = resolved?.grams ?? model.nameGrams
+    const masterPriceRaw = resolved && resolved.priceIndex !== null ? masterNumber(resolved.row[15 + resolved.priceIndex]) : null
+    const masterPrice = masterPriceRaw !== null && masterPriceRaw > 0 ? masterPriceRaw : null
+    const resolvedMinQty = resolved ? masterNumber(resolved.row[0]) : null
+    let issue = ''
+    if (!rawSku) issue = 'sku-kosong'
+    else if (!resolved) issue = 'sku-tidak-ada'
+    else if (resolved.priceIndex === null) issue = 'tier-tidak-ada'
+    else if (masterPrice === null) issue = 'harga-master-kosong'
+    else if (grams !== null && resolvedMinQty !== null && grams < resolvedMinQty * 1000 && model.stock > 0) issue = 'di-bawah-min'
+    return {
+      modelId: model.modelId,
+      name: model.name,
+      sku: rawSku,
+      masterSku: resolved?.masterSku ?? '',
+      grams,
+      price: model.price,
+      originalPrice: model.originalPrice,
+      stock: model.stock,
+      masterPrice,
+      diffPct: masterPrice === null || model.price <= 0 ? null : Math.round(((model.price - masterPrice) / masterPrice) * 1000) / 10,
+      issue,
+    }
+  }).sort((a, b) => (b.grams ?? 0) - (a.grams ?? 0) || a.name.localeCompare(b.name, 'id'))
+}
+
+export function summarizeSyncItem(
+  models: { grams: number | null }[],
+  candidateSkus: string[],
+  masterBySku: Map<string, unknown[]>,
+) {
+  const resolvedItem = candidateSkus
+    .map((sku) => resolveSyncSku(sku, masterBySku))
+    .find((entry) => entry !== null) ?? null
+  const master = resolvedItem?.row
+  const unit = master ? String(master[4] ?? '').trim().toUpperCase() : ''
+  const existingGrams = new Set(models.map((model) => model.grams).filter((grams): grams is number => grams !== null))
+  const missingTiers = master && unit === 'KG'
+    ? allowedVariantTiers(master).allowedTiers
+      .filter((tier) => !existingGrams.has(tier.grams))
+      .map((tier) => ({ grams: tier.grams, name: tier.name, price: tier.price }))
+    : []
+  return {
+    masterSku: resolvedItem?.masterSku ?? '',
+    masterName: master ? String(master[3] ?? '') : '',
+    unit,
+    minQty: master ? masterNumber(master[0]) : null,
+    missingTiers,
+  }
+}
+
+export const shopeeSyncOverview = storeCall(storeOptions, async (request) => {
+  await requireStaff(request, managers)
+  const data = input(request)
+  const singleItemId = data.itemId === undefined ? null : whole(data.itemId, 'Item')
+  const offset = whole(data.offset ?? 0, 'Offset')
+  const status = data.status === 'UNLIST' ? 'UNLIST' : 'NORMAL'
+  const masterRows = await cachedMasterRows()
+  const masterBySku = masterSkuIndex(masterRows)
+  const masterByName = masterNameIndex(masterRows)
+
+  const listing = singleItemId !== null
+    ? { item: [{ item_id: singleItemId }], has_next_page: false, next_offset: offset }
+    : obj((await shopCall('/api/v2/product/get_item_list', { offset, page_size: 20, item_status: status })).response)
+  const ids = list(listing.item).map((item) => Number(item.item_id))
+  const next = Number(listing.next_offset ?? offset + 20)
+  if (ids.length === 0) return { items: [], more: false, next }
+  const base = obj((await shopCall('/api/v2/product/get_item_base_info', { item_id_list: ids.join(',') })).response)
+  const items = await Promise.all(list(base.item_list).map(async (item) => {
+    const itemId = Number(item.item_id)
+    const hasModel = item.has_model === true
+    const rawModels = hasModel
+      ? list(obj((await shopCall('/api/v2/product/get_model_list', { item_id: itemId })).response).model)
+      : [{
+        model_id: 0,
+        model_name: '',
+        model_sku: item.item_sku,
+        price_info: item.price_info,
+        stock_info_v2: item.stock_info_v2,
+      } as Json]
+    const rawSyncModels = rawModels.map((model) => ({
+      modelId: Number(model.model_id ?? 0),
+      name: String(model.model_name ?? ''),
+      sku: String(model.model_sku ?? ''),
+      price: shopeePriceInfo(model.price_info).current,
+      originalPrice: shopeePriceInfo(model.price_info).original,
+      stock: shopeeStockOf(model.stock_info_v2),
+      nameGrams: factorForModelGrams(model),
+    }))
+    const models = buildSyncModels(rawSyncModels, masterBySku)
+    const summary = summarizeSyncItem(models, [item.item_sku, ...rawModels.map((model) => model.model_sku)].map(String), masterBySku)
+    const suggestion = summary.masterSku ? null : suggestMasterByName(String(item.item_name ?? ''), masterRows, masterByName)
+    return {
+      itemId,
+      name: String(item.item_name ?? ''),
+      image: String(list(obj(item.image).image_url_list)[0] ?? ''),
+      status,
+      itemSku: String(item.item_sku ?? ''),
+      suggestedMasterSku: suggestion?.sku ?? '',
+      suggestedMasterName: suggestion?.name ?? '',
+      suggestionMatch: suggestion?.match ?? '',
+      ...summary,
+      hasModel,
+      models,
+    }
+  }))
+  return { items, more: listing.has_next_page === true, next }
+})
+
+// Saran SKU induk untuk produk yang SKU-nya belum cocok: nama produk (tanpa "| nama toko") sama persis dengan nama master.
+function nameKey(name: string) {
+  return name.split('|')[0].toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function masterNameIndex(masterRows: unknown[][]) {
+  const byName = new Map<string, { sku: string; name: string } | null>()
+  for (const row of masterRows.slice(1)) {
+    const sku = normalizeSku(row[1])
+    const name = String(row[3] ?? '').trim()
+    const key = nameKey(name)
+    if (!sku || !key) continue
+    byName.set(key, byName.has(key) ? null : { sku, name })
+  }
+  return byName as Map<string, { sku: string; name: string } | null>
+}
+
+const nameStopWords = new Set(['fresh', 'freshstock', 'segar', 'murni', 'rempah', 'asli', 'premium', 'kg', 'gr', 'gram', 'dan', 'dengan', 'untuk', 'grade', 'super'])
+
+function nameTokens(name: string) {
+  return new Set(name.split('|')[0].toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter((token) => token && !nameStopWords.has(token)))
+}
+
+function similarity(a: Set<string>, b: Set<string>) {
+  if (a.size === 0 || b.size === 0) return 0
+  let shared = 0
+  a.forEach((token) => { if (b.has(token)) shared += 1 })
+  return shared / (a.size + b.size - shared)
+}
+
+// Saran SKU dari nama: sama persis dulu, kalau tidak ada pilih master dengan kata paling mirip yang jelas unggul.
+function suggestMasterByName(itemName: string, masterRows: unknown[][], exact: Map<string, { sku: string; name: string } | null>) {
+  const hit = exact.get(nameKey(itemName))
+  if (hit) return { ...hit, match: 'sama' as const, score: 1 }
+  const variantsOf = (name: string) => [name, ...name.split('|')[0].split('/')].map(nameTokens).filter((tokens) => tokens.size > 0)
+  const wanted = variantsOf(itemName)
+  if (wanted.length === 0) return null
+  const scored: { sku: string; name: string; score: number }[] = []
+  for (const row of masterRows.slice(1)) {
+    const sku = normalizeSku(row[1])
+    const name = String(row[3] ?? '').trim()
+    if (!sku || !name) continue
+    const have = variantsOf(name)
+    let score = 0
+    for (const left of wanted) for (const right of have) score = Math.max(score, similarity(left, right))
+    if (score > 0) scored.push({ sku, name, score })
+  }
+  scored.sort((a, b) => b.score - a.score)
+  const [best, second] = scored
+  if (!best || best.score < 0.6 || (second && best.score - second.score < 0.1)) return null
+  return { sku: best.sku, name: best.name, match: 'mirip' as const, score: Math.round(best.score * 100) / 100 }
+}
+
+function cleanSku(value: unknown) {
+  const sku = typeof value === 'string' ? value.trim().toUpperCase() : ''
+  if (!/^[A-Z0-9][A-Z0-9._\-/]{0,99}$/.test(sku)) throw new HttpsError('invalid-argument', `SKU "${String(value ?? '')}" tidak valid (huruf, angka, - . _ / maksimal 100 karakter).`)
+  return sku
+}
+
+export const shopeeUpdateSku = storeCall(storeOptions, async (request) => {
+  await requireStaff(request, managers)
+  const data = input(request)
+  const itemId = whole(data.itemId, 'Item')
+  const itemSku = data.itemSku === undefined ? null : cleanSku(data.itemSku)
+  const changes = new Map<number, string>()
+  for (const raw of list(data.models)) changes.set(whole(raw.modelId, 'Varian'), cleanSku(raw.sku))
+  if (itemSku === null && changes.size === 0) throw new HttpsError('invalid-argument', 'Tidak ada SKU yang diubah.')
+
+  const modelData = obj((await shopCall('/api/v2/product/get_model_list', { item_id: itemId })).response)
+  const models = list(modelData.model)
+  const tierVariation = list(modelData.tier_variation)
+  const realModelChanges = [...changes].filter(([modelId]) => modelId > 0)
+  if (changes.has(0) && models.length > 0) throw new HttpsError('invalid-argument', 'Produk ini punya varian; ubah SKU lewat variannya.')
+  for (const [modelId] of realModelChanges) {
+    if (!models.some((model) => Number(model.model_id) === modelId)) throw new HttpsError('not-found', `Varian ${modelId} tidak ditemukan.`)
+  }
+
+  const done: string[] = []
+  if (itemSku !== null || changes.has(0)) {
+    await shopCall('/api/v2/product/update_item', {}, { item_id: itemId, item_sku: itemSku ?? changes.get(0) })
+    done.push('SKU induk')
+  }
+  if (realModelChanges.length > 0) {
+    await shopCall('/api/v2/product/update_tier_variation', {}, {
+      item_id: itemId,
+      tier_variation: tierVariation.map((tier) => ({
+        name: String(tier.name ?? ''),
+        option_list: list(tier.option_list).map((option) => {
+          const imageId = String(obj(option.image).image_id ?? '')
+          return imageId ? { option: String(option.option ?? ''), image: { image_id: imageId } } : { option: String(option.option ?? '') }
+        }),
+      })),
+      model_list: models.map((model) => ({
+        tier_index: model.tier_index,
+        model_id: Number(model.model_id),
+        model_sku: changes.get(Number(model.model_id)) ?? String(model.model_sku ?? ''),
+      })),
+    })
+    done.push(`${realModelChanges.length} SKU varian`)
+  }
+  logger.info('Shopee SKU updated from sync panel.', { uid: request.auth?.uid, store: currentStore(), itemId, done })
+  return { ok: true, done }
+})
+
+export const shopeeAddVariants = storeCall(storeOptions, async (request) => {
+  await requireStaff(request, managers)
+  const data = input(request)
+  const itemId = whole(data.itemId, 'Item')
+  const masterSku = cleanSku(data.masterSku)
+  const stocks = obj(data.stockByGrams)
+  const masterRows = await cachedMasterRows()
+  const masters = masterRows.slice(1).filter((row) => normalizeSku(row[1]) === masterSku)
+  if (masters.length !== 1) throw new HttpsError('failed-precondition', `SKU ${masterSku} tidak ditemukan tepat satu kali di master.`)
+  const { unit, allowedTiers } = allowedVariantTiers(masters[0])
+  if (unit !== 'KG') throw new HttpsError('failed-precondition', 'Hanya produk KG yang bisa ditambah varian pecahannya.')
+
+  const modelData = obj((await shopCall('/api/v2/product/get_model_list', { item_id: itemId })).response)
+  const tierVariation = list(modelData.tier_variation)
+  const rawModels = list(modelData.model)
+  if (rawModels.length === 0 || tierVariation.length !== 1) {
+    throw new HttpsError('failed-precondition', 'Produk harus punya tepat satu tingkat variasi (misalnya Berat). Buat variasi pertama di Seller Centre dulu.')
+  }
+  const existingGrams = new Set(rawModels.map((model) => {
+    const factor = factorForModel(model)
+    return factor === null ? null : Math.round(factor * 1000)
+  }))
+  const requested = new Set(list(data.grams).map((grams) => Number(grams)))
+  const additions = allowedTiers.filter((tier) => !existingGrams.has(tier.grams) && (requested.size === 0 || requested.has(tier.grams)))
+  if (additions.length === 0) throw new HttpsError('failed-precondition', 'Semua varian pecahan sudah ada.')
+
+  const tier = obj(tierVariation[0])
+  const nextOptions = list(tier.option_list).map((option) => {
+    const imageId = String(obj(option.image).image_id ?? '')
+    return imageId ? { option: String(option.option ?? ''), image: { image_id: imageId } } : { option: String(option.option ?? '') }
+  })
+  for (const addition of additions) {
+    if (!nextOptions.some((option) => option.option === addition.name)) nextOptions.push({ option: addition.name })
+  }
+  await shopCall('/api/v2/product/update_tier_variation', {}, {
+    item_id: itemId,
+    tier_variation: [{ name: String(tier.name ?? 'Berat'), option_list: nextOptions }],
+    model_list: rawModels.map((model) => ({
+      tier_index: model.tier_index,
+      model_id: Number(model.model_id),
+      model_sku: String(model.model_sku ?? ''),
+    })),
+  })
+  try {
+    await shopCall('/api/v2/product/add_model', {}, {
+      item_id: itemId,
+      model_list: additions.map((addition) => ({
+        tier_index: [nextOptions.findIndex((option) => option.option === addition.name)],
+        normal_stock: whole(stocks[String(addition.grams)] ?? 0, `Stok ${addition.name}`),
+        original_price: addition.price,
+        model_sku: `${masterSku}-${addition.grams}G`,
+      })),
+    })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'gagal'
+    throw new HttpsError('failed-precondition', `${detail} Opsi variasi mungkin sudah tertambah tanpa model; muat ulang produk lalu coba lagi.`)
+  }
+  logger.info('Shopee variants added from sync panel.', { uid: request.auth?.uid, store: currentStore(), itemId, added: additions.map((a) => a.grams) })
+  return { ok: true, added: additions.map((addition) => addition.name) }
+})
+
+function factorForModelGrams(model: Json): number | null {
+  const factor = factorForModel(model)
+  return factor === null ? null : Math.round(factor * 1000)
+}
+
+export const shopeeResetStock = storeCall(storeOptions, async (request) => {
+  await requireStaff(request, ['owner'])
+  const entries = list(input(request).items)
+  if (entries.length < 1 || entries.length > 20) {
+    throw new HttpsError('invalid-argument', 'Reset 1 sampai 20 produk per permintaan.')
+  }
+  const results: { itemId: number; ok: boolean; error?: string }[] = []
+  for (const entry of entries) {
+    const itemId = whole(entry.itemId, 'Item')
+    const rawModelIds = Array.isArray(entry.modelIds) ? entry.modelIds : [0]
+    const modelIds = [...new Set(rawModelIds.map((modelId) => whole(modelId, 'Varian')))]
+    if (modelIds.length < 1 || modelIds.length > 50) throw new HttpsError('invalid-argument', 'Daftar varian tidak valid.')
+    try {
+      await shopCall('/api/v2/product/update_stock', {}, {
+        item_id: itemId,
+        stock_list: modelIds.map((modelId) => ({ model_id: modelId, seller_stock: [{ stock: 0 }] })),
+      })
+      results.push({ itemId, ok: true })
+    } catch (error) {
+      results.push({ itemId, ok: false, error: error instanceof Error ? error.message : 'Gagal mereset stok Shopee.' })
+    }
+  }
+  logger.warn('Shopee stock reset to zero by owner.', { uid: request.auth?.uid, store: currentStore(), itemCount: entries.length })
+  return { results }
 })
 
 export const shopeeReturns = storeCall(storeOptions, async (request) => {
@@ -1877,6 +2216,13 @@ function stringRecord(value: unknown): Record<string, string> {
   )
 }
 
+function numberRecord(value: unknown): Record<string, number> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, number] => typeof entry[1] === 'number'),
+  )
+}
+
 const shopeePushSecrets = [
   partnerIdSecret,
   partnerKeySecret,
@@ -1910,7 +2256,7 @@ export const notifyShopeePushEvents = onSchedule(
           const knownOrders = stringArray(state.orderSns)
           const knownOrderSet = new Set(knownOrders)
           const knownChats = stringRecord(state.chatLatest)
-          const knownUrgent = new Set(stringArray(state.urgentOrderSns))
+          const knownUrgent = numberRecord(state.urgentAlerts)
           const storeName = store === 'freshstock' ? 'Freshstock' : '2goFresh'
 
           if (initialized) {
@@ -1919,7 +2265,7 @@ export const notifyShopeePushEvents = onSchedule(
                 await sendPosPush({
                   title: `Pesanan Shopee baru · ${storeName}`,
                   body: `${order.orderSn} · ${order.buyer || 'Pembeli'}`,
-                  channelId: store === 'freshstock' ? 'pos-freshstock-orders-v2' : 'pos-2gofresh-orders-v2',
+                  channelId: store === 'freshstock' ? 'pos-freshstock-orders-v3' : 'pos-2gofresh-orders-v3',
                   data: { panel: 'marketplace', kind: 'shopee-order', store, orderSn: order.orderSn },
                 })
                 knownOrderSet.add(order.orderSn)
@@ -1929,17 +2275,17 @@ export const notifyShopeePushEvents = onSchedule(
             const now = Date.now()
             for (const order of orders) {
               if (
-                order.shipBy > now &&
+                order.shipBy > 0 &&
                 order.shipBy - now <= shopeePushAlarmWindowMs &&
-                !knownUrgent.has(order.orderSn)
+                now - (knownUrgent[order.orderSn] ?? 0) >= shopeePushAlarmRepeatMs
               ) {
                 await sendPosPush({
-                  title: `Batas kirim kurang dari 10 menit · ${storeName}`,
+                  title: `Batas kirim kurang dari 12 menit · ${storeName}`,
                   body: `${order.orderSn} · ${order.buyer || 'Pembeli'}`,
-                  channelId: store === 'freshstock' ? 'pos-freshstock-shipping-v2' : 'pos-2gofresh-shipping-v2',
+                  channelId: store === 'freshstock' ? 'pos-freshstock-shipping-v3' : 'pos-2gofresh-shipping-v3',
                   data: { panel: 'marketplace', kind: 'shopee-shipping-alert', store, orderSn: order.orderSn },
                 })
-                knownUrgent.add(order.orderSn)
+                knownUrgent[order.orderSn] = now
               }
             }
 
@@ -1948,7 +2294,7 @@ export const notifyShopeePushEvents = onSchedule(
               await sendPosPush({
                 title: `Chat Shopee baru · ${storeName}`,
                 body: `${chat.buyer || 'Pembeli'}: ${chat.message}`,
-                channelId: store === 'freshstock' ? 'pos-freshstock-chats-v2' : 'pos-2gofresh-chats-v2',
+                channelId: store === 'freshstock' ? 'pos-freshstock-chats-v3' : 'pos-2gofresh-chats-v3',
                 data: { panel: 'chat', kind: 'shopee-chat', store },
               })
             }
@@ -1960,7 +2306,11 @@ export const notifyShopeePushEvents = onSchedule(
             initialized: true,
             orderSns: [...new Set([...knownOrders, ...orders.map((order) => order.orderSn)])].slice(-500),
             chatLatest: Object.fromEntries(Object.entries(latestChats).slice(-500)),
-            urgentOrderSns: [...knownUrgent].slice(-500),
+            urgentAlerts: Object.fromEntries(
+              orders
+                .filter((order) => knownUrgent[order.orderSn] !== undefined)
+                .map((order) => [order.orderSn, knownUrgent[order.orderSn]]),
+            ),
             updatedAt: FieldValue.serverTimestamp(),
           })
         } catch (error) {

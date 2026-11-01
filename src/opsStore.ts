@@ -2,6 +2,8 @@ import { useSyncExternalStore } from 'react'
 import { Capacitor } from '@capacitor/core'
 
 export type ShopeeStoreId = '2gofresh' | 'freshstock'
+export type AlertStoreId = ShopeeStoreId | 'tiktok'
+export type UrgentOrder = { id: string; buyer: string; shipBy: number }
 export type ToastAction = { label: string; panel: string; orderSn?: string; store?: ShopeeStoreId }
 export type Toast = {
   id: string
@@ -12,15 +14,19 @@ export type Toast = {
   sticky: boolean
   // Suara yang menyertai pop-up; berhenti begitu pop-up ditutup.
   sound?: string
-  // Toko Shopee asal pop-up, untuk label dan warna.
-  store?: ShopeeStoreId
+  // Toko asal pop-up, untuk label dan warna.
+  store?: AlertStoreId
 }
 
 export const shopeeStoreNames: Record<ShopeeStoreId, string> = { '2gofresh': '2goFresh', freshstock: 'Freshstock' }
-export const SHIP_ALARM_WINDOW_MS = 10 * 60 * 1000
-export const shopeeSounds: Record<ShopeeStoreId, { order: string; chat: string; alarm: string }> = {
-  '2gofresh': { order: '/orderanmasuk_2gofresh.mp3', chat: '/chatmasuk_2gofresh.mp3', alarm: '/kurang10menit_2gofresh.mp3' },
-  freshstock: { order: '/orderanmasuk_freshstock.mp3', chat: '/chatmasuk_freshstock.mp3', alarm: '/kurang10menit_freshstock.mp3' },
+export const alertStoreNames: Record<AlertStoreId, string> = { '2gofresh': 'Shopee 2goFresh', freshstock: 'Shopee Freshstock', tiktok: 'TikTok 2goFresh' }
+// Pesanan yang batas kirimnya kurang dari 12 menit memicu alarm, diulang tiap 2 menit selama belum dikirim.
+export const SHIP_ALARM_WINDOW_MS = 12 * 60 * 1000
+export const SHIP_ALARM_REPEAT_MS = 2 * 60 * 1000
+export const shopeeSounds: Record<AlertStoreId, { order: string; chat: string; alarm: string }> = {
+  '2gofresh': { order: '/orderanmasuk_2gofresh.mp3', chat: '/chatmasuk_2gofresh.mp3', alarm: '/kurang12menit_2gofresh.mp3' },
+  freshstock: { order: '/orderanmasuk_freshstock.mp3', chat: '/chatmasuk_freshstock.mp3', alarm: '/kurang12menit_freshstock.mp3' },
+  tiktok: { order: '/orderanmasuk_tiktok.mp3', chat: '/chatmasuk_tiktok.mp3', alarm: '/kurang12menit_tiktok.mp3' },
 }
 type State = {
   shopeeToShip: number
@@ -31,6 +37,8 @@ type State = {
   openOrderSn: string
   openOrderStore: ShopeeStoreId
   navRequest: string
+  // Pesanan yang batas kirimnya hampir habis per toko; dipakai pop-up peringatan.
+  shipAlerts: Partial<Record<AlertStoreId, UrgentOrder[]>>
 }
 
 let state: State = {
@@ -42,6 +50,7 @@ let state: State = {
   openOrderSn: '',
   openOrderStore: '2gofresh',
   navRequest: '',
+  shipAlerts: {},
 }
 const listeners = new Set<() => void>()
 

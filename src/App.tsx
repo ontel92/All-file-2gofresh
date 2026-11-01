@@ -7,6 +7,8 @@ import { storeInfo } from './storeInfo'
 import { vipCardSku, vipFreeShippingKm, vipMinimumPurchase } from './shipping'
 import Account from './shop/Account'
 import Checkout from './shop/Checkout'
+import OrderThanks from './shop/OrderThanks'
+import type { Receipt, ReceiptState } from './shop/OrderThanks'
 import { currency, qtyFormat, useCustomer } from './shop/customer'
 import type { CartMap, Product } from './shop/customer'
 import YubiChat from './YubiChat'
@@ -110,6 +112,21 @@ function App() {
   const [checkout, setCheckout] = useState(false)
   const [account, setAccount] = useState<'login' | 'register' | null>(null)
   const [orderNotice, setOrderNotice] = useState('')
+  const [thanks, setThanks] = useState<ReceiptState | null>(null)
+
+  const showReceipt = useCallback((data: { paymentStatus: string; status: string; receipt: Receipt }) => {
+    const kind = data.paymentStatus === 'paid' ? 'paid' : data.status === 'cancelled' ? 'closed' : 'pending'
+    setThanks({ kind, receipt: data.receipt })
+    if (kind === 'paid') setCart({})
+  }, [])
+
+  function closeThanks() {
+    setThanks(null)
+    setOrderNotice('')
+    const url = new URL(window.location.href)
+    for (const key of ['order', 'order_id', 'status_code', 'transaction_status']) url.searchParams.delete(key)
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }
   const customer = useCustomer()
   const [pending, setPending] = useState<PendingPayment | null>(loadPending)
   const [now, setNow] = useState(() => Date.now())
@@ -135,13 +152,12 @@ function App() {
   useEffect(() => {
     if (!pending || !customer.ready || !customer.user) return
     let cancelled = false
-    void httpsCallable<unknown, { paymentStatus: string; status: string }>(functions, 'checkMidtransPayment')({ orderId: pending.orderId })
+    void httpsCallable<unknown, { paymentStatus: string; status: string; receipt: Receipt }>(functions, 'checkMidtransPayment')({ orderId: pending.orderId })
       .then((result) => {
         if (cancelled) return
         if (result.data.paymentStatus === 'paid') {
-          setCart({})
           setPending(null)
-          setOrderNotice('Pembayaran berhasil! Pesanan Anda sedang kami proses.')
+          showReceipt(result.data)
         } else if (result.data.status === 'cancelled') {
           setCart({})
           setPending(null)
@@ -152,7 +168,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [pending, customer.ready, customer.user])
+  }, [pending, customer.ready, customer.user, showReceipt])
 
   useEffect(() => {
     if (!pending) return
@@ -243,20 +259,17 @@ function App() {
     const orderId = new URLSearchParams(window.location.search).get('order')
     if (!orderId || !customer.ready || !customer.user) return
     let cancelled = false
-    void httpsCallable<unknown, { paymentStatus: string }>(functions, 'checkMidtransPayment')({ orderId })
+    void httpsCallable<unknown, { paymentStatus: string; status: string; receipt: Receipt }>(functions, 'checkMidtransPayment')({ orderId })
       .then((result) => {
         if (cancelled) return
-        setOrderNotice(
-          result.data.paymentStatus === 'paid'
-            ? 'Pembayaran berhasil! Pesanan Anda sedang kami proses.'
-            : 'Pembayaran belum terkonfirmasi. Jika sudah membayar, status akan diperbarui otomatis.',
-        )
+        showReceipt(result.data)
+        if (result.data.paymentStatus === 'paid') setPending(null)
       })
       .catch(() => undefined)
     return () => {
       cancelled = true
     }
-  }, [customer.ready, customer.user])
+  }, [customer.ready, customer.user, showReceipt])
 
   const whatsappHref = `https://wa.me/6285176768067?text=${encodeURIComponent('Halo 2goFresh, saya mau tanya produk.')}`
 
@@ -465,8 +478,8 @@ function App() {
       </footer>
 
       {cartOpen && (
-        <div className="drawer-wrap" onClick={() => setCartOpen(false)}>
-          <aside className="drawer" role="dialog" aria-label="Keranjang" onClick={(event) => event.stopPropagation()}>
+        <div className="drawer-wrap">
+          <aside className="drawer" role="dialog" aria-label="Keranjang">
             <header>
               <h2>Keranjang 🛒</h2>
               <button type="button" className="modal-close static" aria-label="Tutup" onClick={() => setCartOpen(false)}>×</button>
@@ -526,6 +539,7 @@ function App() {
         />
       )}
       <YubiChat />
+      {thanks && <OrderThanks state={thanks} onClose={closeThanks} />}
     </div>
   )
 }

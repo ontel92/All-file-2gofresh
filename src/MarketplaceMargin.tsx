@@ -75,11 +75,11 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : 'Gagal mengambil data settlement Shopee.'
 }
 
-async function fetchMarginReport(period: 'day' | 'week' | 'month') {
-  const result = await httpsCallable<{ period: 'day' | 'week' | 'month' }, Report>(
+async function fetchMarginReport(period: 'day' | 'week' | 'month', store: 'shopee' | 'freshstock') {
+  const result = await httpsCallable<{ period: 'day' | 'week' | 'month'; store: string }, Report>(
     functions,
     'shopeeRealizedMargins',
-  )({ period })
+  )({ period, store: store === 'freshstock' ? 'freshstock' : '2gofresh' })
   return result.data
 }
 
@@ -90,12 +90,13 @@ export default function MarketplaceMargin() {
   const [expanded, setExpanded] = useState('')
   const [search, setSearch] = useState('')
   const [period, setPeriod] = useState<'day' | 'week' | 'month'>('week')
+  const [store, setStore] = useState<'shopee' | 'freshstock'>('shopee')
   const requestInFlight = useRef(false)
   const load = useCallback(async () => {
     if (requestInFlight.current) return
     requestInFlight.current = true
     try {
-      setReport(await fetchMarginReport(period))
+      setReport(await fetchMarginReport(period, store))
       setError('')
     } catch (failure) {
       setError(errorText(failure))
@@ -103,7 +104,7 @@ export default function MarketplaceMargin() {
       setLoading(false)
       requestInFlight.current = false
     }
-  }, [period])
+  }, [period, store])
 
   const refresh = useCallback(() => {
     if (requestInFlight.current) return
@@ -191,6 +192,17 @@ export default function MarketplaceMargin() {
       </div>
 
       <div className="mm-toolbar">
+        <label className="mm-period">
+          Toko
+          <select value={store} onChange={(event) => {
+            setLoading(true)
+            setReport(null)
+            setStore(event.target.value === 'freshstock' ? 'freshstock' : 'shopee')
+          }}>
+            <option value="shopee">Shopee 2goFresh</option>
+            <option value="freshstock">Shopee Freshstock</option>
+          </select>
+        </label>
         <label className="mm-period">
           Periode
           <select value={period} onChange={(event) => {

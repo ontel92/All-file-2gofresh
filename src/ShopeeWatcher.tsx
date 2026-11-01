@@ -1,15 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from './posFirebase'
-import { SHIP_ALARM_WINDOW_MS, playSound, pushToast, setOps, shopeeSounds, shopeeStoreNames, stopSound } from './opsStore'
+import { pushToast, setOps, shopeeSounds, shopeeStoreNames } from './opsStore'
+import { useShipAlarm } from './ShipAlarm'
 import type { ShopeeStoreId } from './opsStore'
 import { countUnreadChats, effectiveUnread } from './shopeeChatState'
 
 type WatchOrder = { orderSn: string; buyer: string; shipBy: number }
 type WatchChat = { id: string; buyer: string; last: string; unread: number; fromBuyer: boolean; latestId: string; lastAt: number }
 
-const POLL_MS = 120000
-const ALARM_REPEAT_MS = 2 * 60 * 1000
+const POLL_MS = 60000
 const CHAT_POLL_MS = 45000
 
 // Kunci 2goFresh tetap seperti sebelumnya agar riwayat notifikasi lama tidak hilang.
@@ -36,19 +36,15 @@ function loadChatCursor(key: string): Record<string, string> | null {
   }
 }
 
-// Memantau pesanan yang perlu dikirim (suara pesanan baru dan alarm 10 menit sebelum batas kirim)
+// Memantau pesanan yang perlu dikirim (suara pesanan baru dan alarm 12 menit sebelum batas kirim)
 // serta chat yang belum dibaca menurut Shopee. Setiap toko memakai suara dan label sendiri.
 export default function ShopeeWatcher({ store = '2gofresh' }: { store?: ShopeeStoreId }) {
-  const [urgent, setUrgent] = useState<WatchOrder[]>([])
   const seenKey = storageKeys[store].seen
   const chatKey = storageKeys[store].chat
   const storeName = shopeeStoreNames[store]
   const sounds = shopeeSounds[store]
   const seen = useRef<Set<string> | null>(loadSeen(seenKey))
-  const lastAlarm = useRef<Record<string, number>>({})
-  // Pesanan yang bannernya sudah ditutup tidak membunyikan alarm lagi.
-  const dismissedAlarm = useRef<Set<string>>(new Set())
-  const urgentRef = useRef<WatchOrder[]>([])
+  const updateAlarm = useShipAlarm(store)
   useEffect(() => {
     let stopped = false
     let polling = false
@@ -80,22 +76,7 @@ export default function ShopeeWatcher({ store = '2gofresh' }: { store?: ShopeeSt
           })
         }
 
-        const now = Date.now()
-        const active = new Set(orders.map((order) => order.orderSn))
-        dismissedAlarm.current.forEach((orderSn) => {
-          if (!active.has(orderSn)) dismissedAlarm.current.delete(orderSn)
-        })
-        const close = orders.filter((order) => order.shipBy > 0 && order.shipBy - now <= SHIP_ALARM_WINDOW_MS && !dismissedAlarm.current.has(order.orderSn))
-        urgentRef.current = close
-        setUrgent(close)
-        if (close.length === 0) {
-          stopSound(sounds.alarm)
-        } else if (close.some((order) => now - (lastAlarm.current[order.orderSn] ?? 0) >= ALARM_REPEAT_MS)) {
-          close.forEach((order) => {
-            lastAlarm.current[order.orderSn] = now
-          })
-          playSound(sounds.alarm)
-        }
+        updateAlarm(orders.map((order) => ({ id: order.orderSn, buyer: order.buyer, shipBy: order.shipBy })))
       } catch {
         // Shopee not connected or temporary failure: stay silent and retry on the next tick.
       } finally {
@@ -114,7 +95,7 @@ export default function ShopeeWatcher({ store = '2gofresh' }: { store?: ShopeeSt
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [store, seenKey, storeName, sounds])
+  }, [store, seenKey, storeName, sounds, updateAlarm])
 
   useEffect(() => {
     let stopped = false
@@ -184,22 +165,5 @@ export default function ShopeeWatcher({ store = '2gofresh' }: { store?: ShopeeSt
     }
   }, [store, chatKey, storeName, sounds])
 
-  function closeBanner() {
-    urgentRef.current.forEach((order) => dismissedAlarm.current.add(order.orderSn))
-    stopSound(sounds.alarm)
-    urgentRef.current = []
-    setUrgent([])
-  }
-
-  if (urgent.length === 0) return null
-
-  return (
-    <div className="sp-watch" role="alert" style={store === 'freshstock' ? { top: '4.6rem' } : undefined}>
-      <div className={`sp-watch-urgent${store === 'freshstock' ? ' freshstock' : ''}`}>
-        <b>⏰ {urgent.length} pesanan Shopee {storeName} kurang dari 10 menit lagi batas kirim!</b>
-        <span>{urgent.map((order) => order.orderSn).join(', ')}</span>
-        <button type="button" onClick={closeBanner}>Tutup</button>
-      </div>
-    </div>
-  )
+  return null
 }

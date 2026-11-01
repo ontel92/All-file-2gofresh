@@ -290,3 +290,6 @@
 
 .chips button.on { background: var(--matcha); border-color: var(--matcha); color: #fff; }
 .pay-pending { background: #fff4e6; border-color: #f07c1f; }
+.thanks-receipt { text-align: left; border: 1px solid #e0dccb; border-radius: 12px; padding: 0.6rem 0.8rem; margin: 0.8rem 0; display: grid; gap: 0.3rem; background: #fff; }
+.thanks-receipt div { display: flex; justify-content: space-between; gap: 0.8rem; }
+.thanks-total { border-top: 1px dashed #d6d3c4; padding-top: 0.4rem; font-size: 1.05rem; }

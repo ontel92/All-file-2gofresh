@@ -6,8 +6,10 @@ import App from './App.tsx'
 import PosEntry from './PosEntry.tsx'
 import InfoPage from './InfoPage.tsx'
 import { setupPosApp } from './posPwa'
+import { setupIdleLogout } from './idleLogout'
 
 setupPosApp()
+setupIdleLogout()
 
 // Pada aplikasi native Android (Capacitor), selalu arahkan langsung ke POS
 const isNativeApp = Capacitor.isNativePlatform()

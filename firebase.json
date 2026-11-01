@@ -41,6 +41,13 @@
         }
       },
       {
+        "source": "/tiktok/callback",
+        "function": {
+          "functionId": "tiktokCallback",
+          "region": "asia-southeast2"
+        }
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

@@ -13,18 +13,31 @@ let registeredToken = ''
 const notificationChannels = [
   { id: 'pos-web-orders-v2', name: 'Pesanan Website', sound: 'order_masuk' },
   { id: 'pos-live-chats-v2', name: 'Chat Website', sound: 'chatmasuk' },
-  { id: 'pos-2gofresh-orders-v2', name: 'Pesanan Shopee 2goFresh', sound: 'orderanmasuk_2gofresh' },
-  { id: 'pos-2gofresh-chats-v2', name: 'Chat Shopee 2goFresh', sound: 'chatmasuk_2gofresh' },
-  { id: 'pos-2gofresh-shipping-v2', name: 'Batas Kirim 2goFresh', sound: 'kurang10menit_2gofresh' },
-  { id: 'pos-freshstock-orders-v2', name: 'Pesanan Shopee Freshstock', sound: 'orderanmasuk_freshstock' },
-  { id: 'pos-freshstock-chats-v2', name: 'Chat Shopee Freshstock', sound: 'chatmasuk_freshstock' },
-  { id: 'pos-freshstock-shipping-v2', name: 'Batas Kirim Freshstock', sound: 'kurang10menit_freshstock' },
+  { id: 'pos-2gofresh-orders-v3', name: 'Pesanan Shopee 2goFresh', sound: 'orderanmasuk_2gofresh' },
+  { id: 'pos-2gofresh-chats-v3', name: 'Chat Shopee 2goFresh', sound: 'chatmasuk_2gofresh' },
+  { id: 'pos-2gofresh-shipping-v3', name: 'Batas Kirim Shopee 2goFresh', sound: 'kurang12menit_2gofresh' },
+  { id: 'pos-freshstock-orders-v3', name: 'Pesanan Shopee Freshstock', sound: 'orderanmasuk_freshstock' },
+  { id: 'pos-freshstock-chats-v3', name: 'Chat Shopee Freshstock', sound: 'chatmasuk_freshstock' },
+  { id: 'pos-freshstock-shipping-v3', name: 'Batas Kirim Shopee Freshstock', sound: 'kurang12menit_freshstock' },
+  { id: 'pos-tiktok-orders-v3', name: 'Pesanan TikTok 2goFresh', sound: 'orderanmasuk_tiktok' },
+  { id: 'pos-tiktok-chats-v3', name: 'Chat TikTok 2goFresh', sound: 'chatmasuk_tiktok' },
+  { id: 'pos-tiktok-shipping-v3', name: 'Batas Kirim TikTok 2goFresh', sound: 'kurang12menit_tiktok' },
 ] as const
+
+// Channel lama tidak bisa diubah suaranya, jadi dihapus dan diganti channel baru.
+const obsoleteChannelIds = [
+  'pos-2gofresh-orders-v2',
+  'pos-2gofresh-chats-v2',
+  'pos-2gofresh-shipping-v2',
+  'pos-freshstock-orders-v2',
+  'pos-freshstock-chats-v2',
+  'pos-freshstock-shipping-v2',
+]
 
 function actionFromData(value: unknown): ToastAction | null {
   if (typeof value !== 'object' || value === null) return null
   const data = value as Record<string, unknown>
-  const panels = new Set(['marketplace', 'chat', 'web-order'])
+  const panels = new Set(['marketplace', 'chat', 'web-order', 'tiktok'])
   if (typeof data.panel !== 'string' || !panels.has(data.panel)) return null
   const action: ToastAction = { label: 'Buka', panel: data.panel }
   if (typeof data.orderSn === 'string') action.orderSn = data.orderSn
@@ -146,6 +159,7 @@ export function usePosPush(uid: string | undefined, enabled: boolean) {
           return
         }
 
+        await Promise.all(obsoleteChannelIds.map((id) => LocalNotifications.deleteChannel({ id }).catch(() => undefined)))
         await Promise.all(notificationChannels.map((channel) => LocalNotifications.createChannel({
           ...channel,
           description: `Notifikasi POS: ${channel.name}.`,

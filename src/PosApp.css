@@ -709,6 +709,60 @@
   padding: 10px 0;
 }
 
+.pos-staff-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  align-items: end;
+  margin-top: 13px;
+  padding: 12px;
+  border: 1px dashed #dfe3d8;
+}
+
+.pos-staff-form label {
+  display: grid;
+  gap: 4px;
+  color: #6c786d;
+  font-size: 9px;
+}
+
+.pos-staff-form input,
+.pos-staff-form select,
+.pos-staff-controls select {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid #dfe3d8;
+  background: #fff;
+  font-size: 10px;
+}
+
+.pos-staff-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.pos-staff-inactive {
+  opacity: 0.6;
+}
+
+.pos-role-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  color: #526751;
+  background: #eff2eb;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 500;
+}
+
+.pos-role-badge.owner { color: #694b12; background: #fff1cf; }
+.pos-role-badge.supervisor { color: #1f4f7a; background: #e3f0fb; }
+.pos-role-badge.off { color: #8a2b25; background: #fbe4e1; }
+.pos-role-badge.self { color: #fff; background: #4d6a50; }
+
 .pos-bulk-stock {
   display: grid;
   gap: 13px;
